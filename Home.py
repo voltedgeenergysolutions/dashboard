@@ -1,0 +1,669 @@
+"""VOLTEDGE Dashboard — Role-based (Admin / Employee)"""
+
+import streamlit as st
+import sys
+import pandas as pd
+import plotly.graph_objects as go
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from modules.supabase_client import (
+    get_supabase_client, get_projects, get_project_by_id,
+    create_project, update_project, get_activity_logs,
+)
+from modules.auth import (
+    init_auth, handle_oauth_callback, login_form, logout,
+    load_user_from_db, is_admin,
+)
+from modules.utils import format_currency
+from modules.project_detail import render_project_detail
+
+# ── Helper functions (must be defined before any tab code) ────────────────────
+
+def _time_ago(ts_str):
+    if not ts_str:
+        return "-"
+    try:
+        from datetime import datetime, timezone
+        ts   = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        s    = int((datetime.now(timezone.utc) - ts).total_seconds())
+        if s < 60:    return f"{s}s ago"
+        if s < 3600:  return f"{s//60}m ago"
+        if s < 86400: return f"{s//3600}h ago"
+        return f"{s//86400}d ago"
+    except Exception:
+        return "-"
+
+
+def _render_activity_feed(logs):
+    icons = {"project":"📁","step":"🔧","note":"📝","document":"📄","installment":"💳","user":"👤"}
+    html  = '<div style="background:#1e293b;border-radius:10px;padding:4px 0">'
+    for log in logs:
+        icon    = icons.get(log.get("entity_type",""), "⚡")
+        name    = log.get("user_name","Unknown")
+        email   = log.get("user_email","")
+        action  = log.get("action","")
+        project = log.get("project_name","")
+        details = log.get("details","") or ""
+        ago     = _time_ago(log.get("created_at",""))
+        pic     = log.get("user_picture","")
+        avatar  = (f'<img src="{pic}" style="width:28px;height:28px;border-radius:50%;vertical-align:middle">'
+                   if pic else '<span style="width:28px;height:28px;border-radius:50%;background:#334155;'
+                               'display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem">👤</span>')
+        proj_html    = f'<span style="color:#64748b"> · {project}</span>' if project else ""
+        details_html = (f'<div style="font-size:0.72rem;color:#475569;margin-top:2px;'
+                        f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{details}</div>'
+                        if details else "")
+        html += f"""
+        <div style="display:flex;align-items:flex-start;padding:10px 16px;border-bottom:1px solid #334155;gap:10px">
+          <div style="flex-shrink:0;margin-top:2px">{avatar}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:0.82rem">
+              <span style="font-weight:700;color:#f1f5f9">{name}</span>
+              <span style="color:#94a3b8;font-size:0.75rem;margin-left:6px">{email}</span>
+            </div>
+            <div style="font-size:0.82rem;color:#cbd5e1;margin-top:2px">{icon} {action}{proj_html}</div>
+            {details_html}
+          </div>
+          <div style="font-size:0.72rem;color:#475569;flex-shrink:0;white-space:nowrap">{ago}</div>
+        </div>"""
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+st.set_page_config(
+    page_title="VOLTEDGE Dashboard",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown("""
+<style>
+  #MainMenu, footer, header { visibility: hidden; }
+  .block-container { padding-top: 1.2rem; padding-bottom: 1rem; }
+  .stTabs [data-baseweb="tab-list"] {
+      gap: 6px; background: #1e293b; padding: 6px; border-radius: 10px;
+  }
+  .stTabs [data-baseweb="tab"] {
+      border-radius: 8px; padding: 6px 22px;
+      color: #94a3b8; font-weight: 600; font-size: 0.9rem; background: transparent;
+  }
+  .stTabs [aria-selected="true"] { background: #dc2626 !important; color: #fff !important; }
+  div[data-testid="metric-container"] {
+      background: #1e293b; border-radius: 10px;
+      padding: 16px 20px; border-left: 3px solid #dc2626;
+  }
+  div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
+  hr { border-color: #1e293b; }
+</style>
+""", unsafe_allow_html=True)
+
+init_auth()
+handle_oauth_callback()
+
+# ── LOGIN ─────────────────────────────────────────────────────────────────────
+if not st.session_state.get("authenticated", False):
+    _, mid, _ = st.columns([1, 1.4, 1])
+    with mid:
+        st.markdown("""
+        <div style="text-align:center;padding:60px 0 28px">
+          <div style="font-size:3rem">⚡</div>
+          <div style="font-size:2rem;font-weight:800;color:#dc2626;letter-spacing:1px">VOLTEDGE</div>
+          <div style="color:#64748b;margin-top:4px;font-size:0.95rem">Energy Solutions · Solar Dashboard</div>
+        </div>
+        """, unsafe_allow_html=True)
+        login_form()
+    st.stop()
+
+# ── LOAD USER FROM DB ─────────────────────────────────────────────────────────
+supabase = get_supabase_client()
+user_row = load_user_from_db(supabase)
+
+role   = st.session_state.get("user_role",   "employee")
+status = st.session_state.get("user_status", "pending")
+
+# ── PENDING APPROVAL SCREEN ───────────────────────────────────────────────────
+if status == "pending":
+    _, mid, _ = st.columns([1, 1.5, 1])
+    with mid:
+        name = st.session_state.get("user_name","")
+        pic  = st.session_state.get("user_picture","")
+        if pic:
+            st.image(pic, width=64)
+        st.markdown(f"""
+        <div style="text-align:center;padding:20px 0">
+          <div style="font-size:1.5rem;font-weight:700">👋 Hi, {name}!</div>
+          <div style="margin:16px 0;padding:20px;background:#1e293b;border-radius:12px;
+                      border-left:4px solid #f59e0b">
+            <div style="font-size:1.1rem;font-weight:700;color:#f59e0b">⏳ Awaiting Admin Approval</div>
+            <div style="color:#94a3b8;margin-top:8px;font-size:0.9rem">
+              Your account request has been sent to the admin.<br>
+              You'll be able to access the dashboard once approved.
+            </div>
+          </div>
+          <div style="color:#64748b;font-size:0.82rem">Signed in as: {st.session_state.get('user_email','')}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("🔄 Refresh Status", use_container_width=True):
+            st.rerun()
+        if st.button("🚪 Sign Out", use_container_width=True):
+            logout()
+    st.stop()
+
+# ── REJECTED SCREEN ───────────────────────────────────────────────────────────
+if status == "rejected":
+    _, mid, _ = st.columns([1, 1.5, 1])
+    with mid:
+        st.markdown("""
+        <div style="text-align:center;padding:40px 0">
+          <div style="font-size:2rem">🚫</div>
+          <div style="font-size:1.2rem;font-weight:700;color:#ef4444;margin:10px 0">Access Denied</div>
+          <div style="color:#64748b;font-size:0.9rem">
+            Your access request was rejected.<br>Please contact the admin.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("🚪 Sign Out", use_container_width=True):
+            logout()
+    st.stop()
+
+# ── LOAD PROJECT DATA ─────────────────────────────────────────────────────────
+projects    = get_projects(supabase) or []
+df          = pd.DataFrame(projects) if projects else pd.DataFrame()
+
+total       = len(projects)
+active      = sum(1 for p in projects if p.get("project_status") in ("in_progress","planning","approved"))
+completed   = sum(1 for p in projects if p.get("project_status") == "completed")
+cancelled   = sum(1 for p in projects if p.get("project_status") == "cancelled")
+total_cost  = sum(float(p.get("total_cost",  0) or 0) for p in projects)
+total_paid  = sum(float(p.get("amount_paid", 0) or 0) for p in projects)
+balance_due = sum(float(p.get("balance",     0) or 0) for p in projects)
+comp_pct    = round(completed / total * 100, 1) if total else 0.0
+
+
+# ── SHARED HEADER ─────────────────────────────────────────────────────────────
+def render_header(extra_key=""):
+    hc1, hc2 = st.columns([4, 1])
+    with hc1:
+        name = st.session_state.get("user_name") or st.session_state.get("user_email","User")
+        pic  = st.session_state.get("user_picture","")
+        role_badge = "🔴 Admin" if role == "admin" else "🟡 Employee"
+        if pic:
+            pc, tc = st.columns([0.08, 0.92])
+            with pc: st.image(pic, width=42)
+            with tc:
+                st.markdown(
+                    f"<div style='line-height:1.2;padding-top:4px'>"
+                    f"<span style='color:#64748b;font-size:0.75rem'>WELCOME BACK,</span><br>"
+                    f"<span style='font-size:1.45rem;font-weight:800'>⚡ {name}</span>"
+                    f"<span style='background:#1e293b;color:#94a3b8;font-size:0.72rem;"
+                    f"padding:2px 10px;border-radius:20px;margin-left:10px'>{role_badge}</span></div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown(
+                f"<div style='line-height:1.2;padding-top:6px'>"
+                f"<span style='color:#64748b;font-size:0.75rem'>WELCOME BACK,</span><br>"
+                f"<span style='font-size:1.45rem;font-weight:800'>⚡ {name}</span>"
+                f"<span style='background:#1e293b;color:#94a3b8;font-size:0.72rem;"
+                f"padding:2px 10px;border-radius:20px;margin-left:10px'>{role_badge}</span></div>",
+                unsafe_allow_html=True,
+            )
+    with hc2:
+        if st.button("🚪 Logout", use_container_width=True, key=f"logout_{extra_key}"):
+            logout()
+    st.markdown("<hr style='margin:8px 0 14px'>", unsafe_allow_html=True)
+
+
+# ── PROJECT DETAIL (overrides tabs) ──────────────────────────────────────────
+if st.session_state.get("selected_project_id"):
+    pid     = st.session_state.selected_project_id
+    project = get_project_by_id(supabase, pid)
+    if project:
+        render_header("detail")
+        render_project_detail(supabase, project, role=role)
+    else:
+        st.session_state.selected_project_id = None
+        st.rerun()
+    st.stop()
+
+
+# ── MAIN DASHBOARD ────────────────────────────────────────────────────────────
+render_header("main")
+
+# Build tab list based on role
+if role == "admin":
+    tabs = st.tabs(["🏠 Overview", "👥 Edit Customers", "📊 Report", "👤 Users", "⚙️ Settings"])
+    t1, t2, t3, t4, t5 = tabs
+else:
+    tabs = st.tabs(["🏠 Overview", "👥 Edit Customers", "⚙️ Settings"])
+    t1, t2, t5 = tabs
+    t3 = None
+    t4 = None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  OVERVIEW TAB
+# ══════════════════════════════════════════════════════════════════════════════
+with t1:
+    # Project count metrics (both roles)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("📊 Total Projects",  total)
+    c2.metric("🔄 Active Projects", active)
+    c3.metric("✅ Completed",        completed)
+    c4.metric("❌ Cancelled",        cancelled)
+
+    st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+
+    # Financial row — ADMIN ONLY
+    if role == "admin":
+        f1, f2, f3, f4 = st.columns(4)
+        f1.metric("💰 Total Project Value", format_currency(total_cost))
+        f2.metric("✅ Amount Received",      format_currency(total_paid))
+        f3.metric("⏳ Balance Receivable",   format_currency(balance_due))
+        f4.metric("📈 Completion Rate",      f"{comp_pct}%")
+    else:
+        st.metric("📈 Completion Rate", f"{comp_pct}%")
+
+    st.markdown("<hr style='margin:16px 0'>", unsafe_allow_html=True)
+
+    if not df.empty:
+        ch1, ch2 = st.columns(2)
+
+        with ch1:
+            st.markdown("**Projects by Status**")
+            sc  = df["project_status"].value_counts() if "project_status" in df.columns else pd.Series()
+            clr = {"completed":"#22c55e","in_progress":"#3b82f6","planning":"#f59e0b",
+                   "approved":"#8b5cf6","on_hold":"#f97316","cancelled":"#ef4444"}
+            fig_d = go.Figure(go.Pie(
+                labels=sc.index, values=sc.values, hole=0.62,
+                marker_colors=[clr.get(s,"#94a3b8") for s in sc.index],
+                textinfo="label+value", textfont_size=11,
+            ))
+            fig_d.add_annotation(text=f"<b>{total}</b><br>Total",
+                                  x=0.5, y=0.5, font=dict(size=15,color="#f1f5f9"), showarrow=False)
+            fig_d.update_layout(height=270, margin=dict(t=10,b=10,l=10,r=10),
+                                paper_bgcolor="rgba(0,0,0,0)", font_color="#f1f5f9",
+                                showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0)", font_size=11))
+            st.plotly_chart(fig_d, use_container_width=True)
+
+        with ch2:
+            st.markdown("**Projects by System Size**")
+            if "system_size_kwp" in df.columns:
+                bins   = [0, 3, 5, 10, 20, float("inf")]
+                labels = ["1-3 kWp","3-5 kWp","5-10 kWp","10-20 kWp","20+ kWp"]
+                df["_b"] = pd.cut(df["system_size_kwp"].fillna(0), bins=bins, labels=labels)
+                sz = df["_b"].value_counts().reindex(labels, fill_value=0)
+                fig_b = go.Figure(go.Bar(x=sz.index, y=sz.values,
+                                         marker_color="#22c55e", text=sz.values, textposition="outside"))
+                fig_b.update_layout(height=270, margin=dict(t=10,b=30,l=10,r=10),
+                                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                    font_color="#f1f5f9",
+                                    xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
+                st.plotly_chart(fig_b, use_container_width=True)
+
+        st.markdown("<hr style='margin:8px 0'>", unsafe_allow_html=True)
+        st.markdown("**Recent Projects** — click 📂 to open project details")
+
+        for _, row in df.head(10).iterrows():
+            rc1, rc2, rc3, rc4, rc5 = st.columns([2.5, 1.5, 0.8, 1.5, 0.7])
+            rc1.write(row.get("customer_name",""))
+            rc2.write(row.get("location","") or "-")
+            rc3.write(f"{row.get('system_size_kwp',0)} kWp")
+            rc4.write(row.get("project_status","").replace("_"," ").title())
+            if rc5.button("📂", key=f"ov_view_{row['id']}", help="Open project"):
+                st.session_state.selected_project_id = row["id"]
+                st.rerun()
+    else:
+        st.info("No project data yet. Add projects in the **Edit Customers** tab.")
+
+    # ── Last Activity (admin only) ────────────────────────────────
+    if role == "admin":
+        st.markdown("<hr style='margin:16px 0'>", unsafe_allow_html=True)
+        st.markdown("**🕐 Last Activity**")
+        recent_logs = get_activity_logs(supabase, limit=8)
+        if recent_logs:
+            _render_activity_feed(recent_logs)
+        else:
+            st.caption("No activity recorded yet.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  EDIT CUSTOMERS TAB
+# ══════════════════════════════════════════════════════════════════════════════
+with t2:
+    st.markdown("#### 👥 Customer & Project Management")
+    sub1, sub2 = st.tabs(["📋 View & Edit", "➕ Add New Project"])
+
+    with sub1:
+        if df.empty:
+            st.info("No projects found.")
+        else:
+            sc1, sc2 = st.columns([2, 1])
+            with sc1:
+                search = st.text_input("🔍 Search", placeholder="Name or location…")
+            with sc2:
+                sopts = sorted(df["project_status"].dropna().unique().tolist()) if "project_status" in df.columns else []
+                sf    = st.multiselect("Filter by Status", options=sopts)
+
+            filtered = df.copy()
+            if search:
+                mask = pd.Series(False, index=filtered.index)
+                for col in ("customer_name","location"):
+                    if col in filtered.columns:
+                        mask |= filtered[col].astype(str).str.contains(search, case=False, na=False)
+                filtered = filtered[mask]
+            if sf:
+                filtered = filtered[filtered["project_status"].isin(sf)]
+
+            st.caption(f"{len(filtered)} project(s) shown")
+
+            for _, row in filtered.iterrows():
+                pr1, pr2, pr3, pr4, pr5 = st.columns([2.5, 1.5, 0.8, 1.5, 0.7])
+                pr1.write(row.get("customer_name",""))
+                pr2.write(row.get("location","") or "-")
+                pr3.write(f"{row.get('system_size_kwp',0)} kWp")
+                pr4.write(row.get("project_status","").replace("_"," ").title())
+                if pr5.button("📂", key=f"ec_view_{row['id']}"):
+                    st.session_state.selected_project_id = row["id"]
+                    st.rerun()
+
+            # Quick edit — show financial fields only for admin
+            st.markdown("---")
+            st.markdown("**✏️ Quick Edit**")
+            names    = filtered["customer_name"].fillna("Unknown").tolist() if "customer_name" in filtered.columns else []
+            sel_name = st.selectbox("Select project", names, key="edit_sel")
+            if sel_name:
+                row      = filtered[filtered["customer_name"] == sel_name].iloc[0]
+                statuses = ["planning","approved","in_progress","completed","on_hold","cancelled"]
+                cur_s    = row.get("project_status","planning")
+                with st.form("edit_project_form"):
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        new_status = st.selectbox("Status", statuses,
+                            index=statuses.index(cur_s) if cur_s in statuses else 0)
+                        new_loc    = st.text_input("Location", value=str(row.get("location","") or ""))
+                        new_size   = st.number_input("System Size (kWp)", value=float(row.get("system_size_kwp",0) or 0), step=0.5)
+                    with ec2:
+                        if role == "admin":
+                            new_cost  = st.number_input("Total Cost (₹)", value=float(row.get("total_cost",0) or 0), step=1000.0)
+                            new_paid  = st.number_input("Amount Paid (₹)", value=float(row.get("amount_paid",0) or 0), step=1000.0)
+                        new_notes = st.text_area("Notes", value=str(row.get("notes","") or ""))
+
+                    if st.form_submit_button("💾 Save Changes", use_container_width=True):
+                        payload = {
+                            "project_status":  new_status,
+                            "location":        new_loc,
+                            "system_size_kwp": new_size,
+                            "notes":           new_notes,
+                        }
+                        if role == "admin":
+                            payload["total_cost"]  = new_cost
+                            payload["amount_paid"] = new_paid
+                            payload["balance"]     = new_cost - new_paid
+                        update_project(supabase, row["id"], payload)
+                        st.success("✅ Updated!")
+                        st.rerun()
+
+    with sub2:
+        with st.form("create_project_form"):
+            nc1, nc2 = st.columns(2)
+            with nc1:
+                cust_name   = st.text_input("Customer Name *")
+                location    = st.text_input("Location")
+                system_size = st.number_input("System Size (kWp)", min_value=0.0, step=0.5)
+                mobile      = st.text_input("Mobile Number")
+            with nc2:
+                status_new = st.selectbox("Status", ["planning","approved","in_progress","completed","on_hold"])
+                if role == "admin":
+                    total_c  = st.number_input("Total Cost (₹)",  min_value=0.0, step=1000.0)
+                    amount_p = st.number_input("Amount Paid (₹)", min_value=0.0, step=1000.0)
+                else:
+                    total_c  = 0.0
+                    amount_p = 0.0
+                email_c = st.text_input("Customer Email")
+            proj_code = st.text_input("Project Code (e.g. EPC-001)", placeholder="Leave blank to auto-generate")
+            notes_new = st.text_area("Notes")
+
+            if st.form_submit_button("➕ Create Project", use_container_width=True):
+                if not cust_name.strip():
+                    st.error("❌ Customer name is required.")
+                else:
+                    result = create_project(supabase, {
+                        "customer_name":   cust_name.strip(),
+                        "project_code":    proj_code.strip() or None,
+                        "location":        location,
+                        "mobile":          mobile,
+                        "email":           email_c,
+                        "system_size_kwp": system_size,
+                        "project_status":  status_new,
+                        "total_cost":      total_c,
+                        "amount_paid":     amount_p,
+                        "balance":         total_c - amount_p,
+                        "net_payable":     total_c,
+                        "notes":           notes_new,
+                    })
+                    if result:
+                        st.success("✅ Project created! Open it via 📂 to add steps, payments & docs.")
+                        st.rerun()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  REPORT TAB — ADMIN ONLY
+# ══════════════════════════════════════════════════════════════════════════════
+if t3 is not None:
+    with t3:
+        st.markdown("#### 📊 Financial & Project Reports")
+        rc1, rc2, rc3 = st.columns(3)
+        rc1.metric("💰 Total Project Value", format_currency(total_cost))
+        rc2.metric("✅ Total Received",       format_currency(total_paid))
+        rc3.metric("⏳ Outstanding Balance",  format_currency(balance_due))
+
+        st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
+
+        if not df.empty:
+            if "project_status" in df.columns:
+                st.markdown("**Summary by Status**")
+                grp = df.groupby("project_status").agg(
+                    Count=("project_status","count"),
+                    **{"Total Cost":  ("total_cost",  lambda x: x.fillna(0).sum())},
+                    **{"Amount Paid": ("amount_paid", lambda x: x.fillna(0).sum())},
+                    **{"Balance":     ("balance",     lambda x: x.fillna(0).sum())},
+                ).reset_index()
+                grp.rename(columns={"project_status":"Status"}, inplace=True)
+                for col in ("Total Cost","Amount Paid","Balance"):
+                    grp[col] = grp[col].apply(lambda x: format_currency(float(x)))
+                st.dataframe(grp, use_container_width=True, hide_index=True)
+
+            st.markdown("<hr style='margin:12px 0'>", unsafe_allow_html=True)
+            fin_cols = [c for c in ["customer_name","location","system_size_kwp","project_status","total_cost","amount_paid","balance"] if c in df.columns]
+            fin_df   = df[fin_cols].copy()
+            ren      = {"customer_name":"Customer","location":"Location","system_size_kwp":"kWp",
+                        "project_status":"Status","total_cost":"Total Cost","amount_paid":"Paid","balance":"Balance"}
+            fin_df.rename(columns=ren, inplace=True)
+            for col in ("Total Cost","Paid","Balance"):
+                if col in fin_df.columns:
+                    fin_df[col] = fin_df[col].apply(lambda x: format_currency(float(x)) if pd.notna(x) else "₹0")
+            st.dataframe(fin_df, use_container_width=True, hide_index=True)
+
+            raw = df[fin_cols].copy(); raw.rename(columns=ren, inplace=True)
+            st.download_button("⬇️ Export CSV", raw.to_csv(index=False).encode("utf-8"),
+                               "voltedge_report.csv", "text/csv", use_container_width=True)
+
+            if all(c in df.columns for c in ("customer_name","total_cost","amount_paid")):
+                st.markdown("**Payment Collection Analysis**")
+                top = df.nlargest(min(10, len(df)), "total_cost")
+                fig_pay = go.Figure()
+                fig_pay.add_trace(go.Bar(name="Total Cost",  x=top["customer_name"], y=top["total_cost"].fillna(0),  marker_color="#3b82f6"))
+                fig_pay.add_trace(go.Bar(name="Amount Paid", x=top["customer_name"], y=top["amount_paid"].fillna(0), marker_color="#22c55e"))
+                fig_pay.add_trace(go.Bar(name="Balance",     x=top["customer_name"], y=top["balance"].fillna(0),     marker_color="#ef4444"))
+                fig_pay.update_layout(barmode="group", height=350,
+                                      margin=dict(t=10,b=60,l=10,r=10),
+                                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                      font_color="#f1f5f9",
+                                      xaxis=dict(gridcolor="#334155", tickangle=-30),
+                                      yaxis=dict(gridcolor="#334155"),
+                                      legend=dict(bgcolor="rgba(0,0,0,0)"))
+                st.plotly_chart(fig_pay, use_container_width=True)
+        else:
+            st.info("No data available.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  USERS TAB — ADMIN ONLY
+# ══════════════════════════════════════════════════════════════════════════════
+if t4 is not None:
+    with t4:
+        st.markdown("#### 👤 User Management")
+
+        try:
+            all_users = supabase.table("app_users").select("*").order("created_at", desc=True).execute().data or []
+        except Exception as e:
+            st.error(f"Could not load users: {e}")
+            all_users = []
+
+        pending_users  = [u for u in all_users if u.get("status") == "pending"]
+        approved_users = [u for u in all_users if u.get("status") == "approved"]
+        rejected_users = [u for u in all_users if u.get("status") == "rejected"]
+
+        # Pending approvals — highlighted
+        if pending_users:
+            st.markdown(f"### 🔔 Pending Approvals ({len(pending_users)})")
+            for u in pending_users:
+                pc1, pc2, pc3, pc4, pc5 = st.columns([0.5, 2, 2.5, 1.2, 1.2])
+                with pc1:
+                    if u.get("picture"):
+                        st.image(u["picture"], width=36)
+                with pc2:
+                    st.write(f"**{u.get('name','Unknown')}**")
+                with pc3:
+                    st.write(u.get("email",""))
+                with pc4:
+                    if st.button("✅ Approve", key=f"approve_{u['id']}", use_container_width=True):
+                        supabase.table("app_users").update({
+                            "status": "approved", "role": "employee"
+                        }).eq("id", u["id"]).execute()
+                        st.success(f"✅ {u.get('name','')} approved!")
+                        st.rerun()
+                with pc5:
+                    if st.button("❌ Reject", key=f"reject_{u['id']}", use_container_width=True):
+                        supabase.table("app_users").update({"status": "rejected"}).eq("id", u["id"]).execute()
+                        st.warning(f"❌ {u.get('name','')} rejected.")
+                        st.rerun()
+            st.markdown("<hr style='margin:12px 0'>", unsafe_allow_html=True)
+        else:
+            st.success("✅ No pending approvals")
+            st.markdown("<hr style='margin:12px 0'>", unsafe_allow_html=True)
+
+        # All approved users
+        st.markdown(f"**Approved Users ({len(approved_users)})**")
+        for u in approved_users:
+            uc1, uc2, uc3, uc4, uc5 = st.columns([0.5, 2, 2.5, 1.2, 1.2])
+            with uc1:
+                if u.get("picture"):
+                    st.image(u["picture"], width=36)
+            with uc2:
+                st.write(f"**{u.get('name','Unknown')}**")
+            with uc3:
+                st.write(u.get("email",""))
+            with uc4:
+                cur_role = u.get("role","employee")
+                new_role = st.selectbox("Role", ["employee","admin"],
+                    index=0 if cur_role=="employee" else 1,
+                    key=f"role_{u['id']}", label_visibility="collapsed")
+                if new_role != cur_role:
+                    supabase.table("app_users").update({"role": new_role}).eq("id", u["id"]).execute()
+                    st.rerun()
+            with uc5:
+                if u.get("email") != "voltedgeenergysolutions011@gmail.com":
+                    if st.button("🚫 Revoke", key=f"revoke_{u['id']}", use_container_width=True):
+                        supabase.table("app_users").update({"status": "rejected"}).eq("id", u["id"]).execute()
+                        st.rerun()
+
+        if rejected_users:
+            with st.expander(f"Rejected Users ({len(rejected_users)})"):
+                for u in rejected_users:
+                    rc1, rc2, rc3, rc4 = st.columns([2, 2.5, 1.2, 1.2])
+                    rc1.write(u.get("name",""))
+                    rc2.write(u.get("email",""))
+                    rc3.write("Rejected")
+                    if rc4.button("🔁 Re-approve", key=f"reapprove_{u['id']}"):
+                        supabase.table("app_users").update({"status":"approved","role":"employee"}).eq("id",u["id"]).execute()
+                        st.rerun()
+
+        # ── Full Activity Log ─────────────────────────────────────
+        st.markdown("<hr style='margin:20px 0'>", unsafe_allow_html=True)
+        st.markdown("#### 🕐 Employee Activity Log")
+
+        # Filter controls
+        lc1, lc2, lc3 = st.columns([2, 2, 1])
+        with lc1:
+            filter_user = st.selectbox(
+                "Filter by Employee",
+                ["All Employees"] + [f"{u.get('name','')} ({u.get('email','')})" for u in approved_users if u.get("email") != "voltedgeenergysolutions011@gmail.com"],
+                key="log_user_filter"
+            )
+        with lc2:
+            filter_type = st.selectbox(
+                "Filter by Action Type",
+                ["All Actions", "project", "step", "note", "document", "installment"],
+                key="log_type_filter"
+            )
+        with lc3:
+            log_limit = st.selectbox("Show", [25, 50, 100], key="log_limit")
+
+        # Extract email from filter selection
+        filter_email = None
+        if filter_user != "All Employees":
+            filter_email = filter_user.split("(")[-1].rstrip(")")
+
+        all_logs = get_activity_logs(supabase, limit=log_limit, user_email=filter_email)
+
+        # Filter by type if selected
+        if filter_type != "All Actions":
+            all_logs = [l for l in all_logs if l.get("entity_type") == filter_type]
+
+        # Show stats row
+        if all_logs:
+            unique_users    = len(set(l.get("user_email") for l in all_logs))
+            project_actions = sum(1 for l in all_logs if l.get("entity_type") == "project")
+            step_actions    = sum(1 for l in all_logs if l.get("entity_type") == "step")
+
+            ls1, ls2, ls3, ls4 = st.columns(4)
+            ls1.metric("Total Actions",    len(all_logs))
+            ls2.metric("Active Users",     unique_users)
+            ls3.metric("Project Changes",  project_actions)
+            ls4.metric("Step Updates",     step_actions)
+
+            st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+            _render_activity_feed(all_logs)
+        else:
+            st.info("No activity logs found for the selected filter.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SETTINGS TAB
+# ══════════════════════════════════════════════════════════════════════════════
+with t5:
+    st.markdown("#### ⚙️ Settings & Profile")
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        st.markdown("**👤 Your Profile**")
+        pic = st.session_state.get("user_picture","")
+        if pic:
+            st.image(pic, width=72)
+        st.write(f"**Name:** {st.session_state.get('user_name','N/A')}")
+        st.write(f"**Email:** {st.session_state.get('user_email','N/A')}")
+        st.write(f"**Role:** {role.title()}")
+        st.write(f"**Status:** {status.title()}")
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🚪 Sign Out", use_container_width=True, key="settings_logout"):
+            logout()
+    with sc2:
+        st.markdown("**📱 App Info**")
+        st.info("**VOLTEDGE Energy Solutions**\nSolar Project Dashboard v2.0\n\n- Framework: Streamlit\n- Database: Supabase\n- Auth: Google OAuth 2.0")
+        qs1, qs2 = st.columns(2)
+        qs1.metric("Total Projects", total)
+        qs2.metric("Completion",     f"{comp_pct}%")
