@@ -66,14 +66,14 @@ def handle_oauth_callback():
         from google_auth_oauthlib.flow import Flow
         from google.oauth2 import id_token
         from google.auth.transport import requests as google_requests
-
-        stored_state = st.session_state.get("oauth_state", "")
-        flow = Flow.from_client_config(
-            _client_config(), scopes=SCOPES,
-            redirect_uri=REDIRECT_URI, state=stored_state,
-        )
         code  = params.get("code", "")
         state = params.get("state", "")
+
+        # Use state from URL — session may be lost on server restart (Render free tier)
+        flow = Flow.from_client_config(
+            _client_config(), scopes=SCOPES,
+            redirect_uri=REDIRECT_URI, state=state,
+        )
         flow.fetch_token(
             authorization_response=f"{REDIRECT_URI}?{urllib.parse.urlencode({'code': code, 'state': state})}"
         )
@@ -81,6 +81,7 @@ def handle_oauth_callback():
             flow.credentials.id_token,
             google_requests.Request(),
             GOOGLE_CLIENT_ID,
+            clock_skew_in_seconds=10,
         )
 
         st.session_state.authenticated = True
