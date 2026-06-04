@@ -21,17 +21,6 @@ SCOPES = [
 ADMIN_EMAIL = "voltedgeenergysolutions011@gmail.com"
 
 
-def _client_config():
-    return {
-        "web": {
-            "client_id":     GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
-            "token_uri":     "https://oauth2.googleapis.com/token",
-            "redirect_uris": [REDIRECT_URI],
-        }
-    }
-
 
 def init_auth():
     if "authenticated" not in st.session_state:
@@ -45,16 +34,20 @@ def init_auth():
 
 
 def get_login_url():
-    from google_auth_oauthlib.flow import Flow
-    flow = Flow.from_client_config(_client_config(), scopes=SCOPES, redirect_uri=REDIRECT_URI)
-    auth_url, state = flow.authorization_url(
-        access_type="offline",
-        prompt="select_account",
-        # Explicitly disable PKCE — code_verifier would be lost on server restart
-        autogenerate_code_verifier=False,
-    )
+    import secrets
+    state = secrets.token_urlsafe(32)
     st.session_state.oauth_state = state
-    return auth_url
+    # Build URL manually — no PKCE, no google_auth_oauthlib, works on any server
+    params = urllib.parse.urlencode({
+        "client_id":     GOOGLE_CLIENT_ID,
+        "redirect_uri":  REDIRECT_URI,
+        "response_type": "code",
+        "scope":         "openid email profile",
+        "access_type":   "offline",
+        "prompt":        "select_account",
+        "state":         state,
+    })
+    return f"https://accounts.google.com/o/oauth2/v2/auth?{params}"
 
 
 def handle_oauth_callback():
