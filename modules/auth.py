@@ -49,8 +49,9 @@ def get_login_url():
     flow = Flow.from_client_config(_client_config(), scopes=SCOPES, redirect_uri=REDIRECT_URI)
     auth_url, state = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="true",
         prompt="select_account",
+        # Explicitly disable PKCE — code_verifier would be lost on server restart
+        autogenerate_code_verifier=False,
     )
     st.session_state.oauth_state = state
     return auth_url
@@ -63,22 +64,33 @@ def handle_oauth_callback():
         return False
 
     try:
-        from google_auth_oauthlib.flow import Flow
+        import requests as http
         from google.oauth2 import id_token
         from google.auth.transport import requests as google_requests
-        code  = params.get("code", "")
-        state = params.get("state", "")
 
-        # Use state from URL — session may be lost on server restart (Render free tier)
-        flow = Flow.from_client_config(
-            _client_config(), scopes=SCOPES,
-            redirect_uri=REDIRECT_URI, state=state,
+        code = params.get("code", "")
+
+        # Direct token exchange — no PKCE, no session state needed.
+        # google_auth_oauthlib stores code_verifier in the Flow object which
+        # is lost on Render restarts, causing "Missing code verifier" error.
+        resp = http.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code":          code,
+                "client_id":     GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri":  REDIRECT_URI,
+                "grant_type":    "authorization_code",
+            },
+            timeout=10,
         )
-        flow.fetch_token(
-            authorization_response=f"{REDIRECT_URI}?{urllib.parse.urlencode({'code': code, 'state': state})}"
-        )
+        tokens = resp.json()
+
+        if "error" in tokens:
+            raise Exception(f"{tokens['error']}: {tokens.get('error_description', '')}")
+
         id_info = id_token.verify_oauth2_token(
-            flow.credentials.id_token,
+            tokens["id_token"],
             google_requests.Request(),
             GOOGLE_CLIENT_ID,
             clock_skew_in_seconds=10,
