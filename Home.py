@@ -497,17 +497,27 @@ with t2:
 
             np_status = st.selectbox("Project Status", ["planning","approved","in_progress","completed","on_hold"], key="np_status")
 
-            # Payment mode toggle
-            st.markdown("<div style='color:#94a3b8;font-size:0.78rem;margin:6px 0 4px'>PAYMENT MODE</div>", unsafe_allow_html=True)
+            # Payment mode toggle — styled orange for selected
+            st.markdown("<div style='color:#94a3b8;font-size:0.78rem;margin:8px 0 6px;text-transform:uppercase;letter-spacing:0.5px'>PAYMENT MODE</div>", unsafe_allow_html=True)
+            _pm = st.session_state.get("np_pay_mode","CASH")
+            _cash_bg  = "#f97316" if _pm == "CASH" else "#1e293b"
+            _loan_bg  = "#f97316" if _pm == "LOAN" else "#1e293b"
+            _cash_brd = "2px solid #f97316" if _pm == "CASH" else "2px solid #334155"
+            _loan_brd = "2px solid #f97316" if _pm == "LOAN" else "2px solid #334155"
+            st.markdown(f"""
+            <div style="display:flex;gap:10px;margin-bottom:6px">
+              <div style="flex:1;text-align:center;background:{_cash_bg};border:{_cash_brd};
+                border-radius:8px;padding:9px 0;font-weight:700;font-size:0.9rem;color:#fff;cursor:pointer">CASH</div>
+              <div style="flex:1;text-align:center;background:{_loan_bg};border:{_loan_brd};
+                border-radius:8px;padding:9px 0;font-weight:700;font-size:0.9rem;color:#fff;cursor:pointer">LOAN</div>
+            </div>""", unsafe_allow_html=True)
             pm1, pm2 = st.columns(2)
             with pm1:
-                cash_style = "background:#22c55e;color:#fff;" if st.session_state.np_pay_mode=="CASH" else ""
-                if st.button("CASH", use_container_width=True, key="pm_cash"):
+                if st.button("Select CASH", use_container_width=True, key="pm_cash"):
                     st.session_state.np_pay_mode = "CASH"; st.rerun()
             with pm2:
-                if st.button("LOAN", use_container_width=True, key="pm_loan"):
+                if st.button("Select LOAN", use_container_width=True, key="pm_loan"):
                     st.session_state.np_pay_mode = "LOAN"; st.rerun()
-            st.markdown(f"<div style='font-size:0.78rem;color:#22c55e;margin-bottom:6px'>Selected: {st.session_state.np_pay_mode}</div>", unsafe_allow_html=True)
 
             # Financial fields (admin only)
             if role == "admin":
@@ -521,42 +531,51 @@ with t2:
 
             np_notes = st.text_area("Notes", placeholder="Any additional notes…", key="np_notes", height=68)
 
-            # ── Add Installment from Bank Side ──────────────────
+            # ── Add Installments from Customer Side ─────────────
             st.markdown("""
-            <div style="background:#1e293b;border-radius:10px;padding:12px 14px;margin-top:8px">
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-                <span style="font-size:1rem">🏦</span>
-                <span style="font-weight:700;font-size:0.9rem">ADD INSTALLMENT FROM BANK SIDE</span>
+            <div style="background:#1e293b;border-radius:10px;padding:12px 14px;margin-top:10px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
+                <span style="font-size:1.1rem">🏛️</span>
+                <span style="font-weight:700;font-size:0.88rem;text-transform:uppercase">Add Installments from Customer Side</span>
               </div>
-              <div style="color:#64748b;font-size:0.72rem;margin-bottom:8px">(MOSTLY 2 — 70% & 30%)</div>
+              <div style="color:#64748b;font-size:0.72rem;margin-bottom:8px">(MOSTLY 3)</div>
             </div>""", unsafe_allow_html=True)
 
-            # Show draft installments
+            # Show existing draft installments
             if st.session_state.draft_insts:
-                for i, inst in enumerate(st.session_state.draft_insts):
-                    ic1, ic2, ic3, ic4 = st.columns([0.5, 1.2, 1.2, 0.4])
-                    ic1.markdown(f"<div style='padding-top:8px;font-size:0.8rem'>#{inst['no']}</div>", unsafe_allow_html=True)
-                    ic2.markdown(f"<div style='padding-top:8px;font-size:0.8rem'>{format_currency(inst['amount'])}</div>", unsafe_allow_html=True)
-                    ic3.markdown(f"<div style='padding-top:8px;font-size:0.8rem'>{inst['due_date']}</div>", unsafe_allow_html=True)
-                    if ic4.button("🗑️", key=f"del_di_{i}"):
-                        st.session_state.draft_insts.pop(i); st.rerun()
+                _inst_html = '<div style="background:#0f172a;border-radius:8px;padding:8px 12px;margin-top:4px">'
+                _inst_html += '<div style="display:flex;color:#64748b;font-size:0.72rem;padding:4px 0;border-bottom:1px solid #1e293b;font-weight:600"><span style="flex:0.4">#</span><span style="flex:1">Amount</span><span style="flex:1">Date</span><span style="flex:0.8">Status</span></div>'
+                for inst in st.session_state.draft_insts:
+                    _inst_html += f'<div style="display:flex;font-size:0.8rem;padding:6px 0;border-bottom:1px solid #1e293b"><span style="flex:0.4;color:#94a3b8">{inst["no"]}</span><span style="flex:1;font-weight:600">{format_currency(inst["amount"])}</span><span style="flex:1;color:#94a3b8">{inst["due_date"]}</span><span style="flex:0.8;color:{"#22c55e" if inst["status"]=="paid" else "#f59e0b"}">{inst["status"].title()}</span></div>'
+                _inst_html += '</div>'
+                st.markdown(_inst_html, unsafe_allow_html=True)
 
-            # Add installment expander
-            with st.expander("➕  Add Installment"):
-                with st.form("add_inst_draft"):
-                    dac1, dac2 = st.columns(2)
-                    with dac1:
-                        di_no  = st.number_input("Installment #", min_value=1, value=len(st.session_state.draft_insts)+1, key="di_no")
-                        di_amt = st.number_input("Amount (₹)", min_value=0.0, step=5000.0, key="di_amt")
-                    with dac2:
-                        di_due = st.date_input("Due Date", key="di_due")
-                        di_st  = st.selectbox("Status", ["pending","paid"], key="di_st")
-                    if st.form_submit_button("➕ Add", use_container_width=True):
-                        st.session_state.draft_insts.append({
-                            "no": int(di_no), "amount": di_amt,
-                            "due_date": str(di_due), "status": di_st
-                        })
-                        st.rerun()
+                # Delete buttons
+                del_cols = st.columns(len(st.session_state.draft_insts))
+                for i, inst in enumerate(st.session_state.draft_insts):
+                    with del_cols[i]:
+                        if st.button(f"🗑️ #{inst['no']}", key=f"del_di_{i}", use_container_width=True):
+                            st.session_state.draft_insts.pop(i); st.rerun()
+
+            # Add installment inline (no expander — matches image)
+            st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+            with st.form("add_inst_draft", clear_on_submit=True):
+                st.markdown("<div style='color:#94a3b8;font-size:0.78rem;margin-bottom:6px'>➕ Add Installment — Amount & Date</div>", unsafe_allow_html=True)
+                dac1, dac2, dac3 = st.columns([1, 1.2, 1])
+                with dac1:
+                    di_no  = st.number_input("Inst #", min_value=1,
+                                             value=len(st.session_state.draft_insts)+1, key="di_no")
+                with dac2:
+                    di_amt = st.number_input("Amount (₹)", min_value=0.0, step=5000.0, key="di_amt")
+                with dac3:
+                    di_due = st.date_input("Date", key="di_due")
+                di_st = st.selectbox("Status", ["pending","paid"], key="di_st")
+                if st.form_submit_button("➕ Add Installment", use_container_width=True):
+                    st.session_state.draft_insts.append({
+                        "no": int(di_no), "amount": di_amt,
+                        "due_date": str(di_due), "status": di_st
+                    })
+                    st.rerun()
 
         # ── SAVE button ────────────────────────────────────────────
         st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
