@@ -528,70 +528,54 @@ with t2:
 
             np_notes = st.text_area("Notes", placeholder="Any additional notes…", key="np_notes", height=60)
 
-            # ── LOAN: Bank-side installments ─────────────────────
+            # ── Installments — LOAN=Bank Side only, CASH=Customer Side only ──
             if _pm == "LOAN":
-                st.markdown("""
-                <div style="background:#1e293b;border-radius:10px;padding:12px 14px;margin-top:8px">
-                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
-                    <span style="font-size:1rem">🏦</span>
-                    <span style="font-weight:700;font-size:0.85rem;text-transform:uppercase">Add Installment from Bank Side</span>
-                  </div>
-                  <div style="color:#64748b;font-size:0.72rem">(MOSTLY 2 — 70% &amp; 30%)</div>
-                </div>""", unsafe_allow_html=True)
-
                 if "bank_insts" not in st.session_state:
                     st.session_state.bank_insts = []
+                inst_list_key = "bank_insts"
+                inst_label    = "🏦 ADD INSTALLMENT FROM BANK SIDE"
+                inst_sub      = "(MOSTLY 2 — 70% & 30%)"
+                inst_form_key = "bank_inst_form"
+                inst_del_key  = "del_bi"
+            else:
+                inst_list_key = "draft_insts"
+                inst_label    = "🏛️ ADD INSTALLMENTS FROM CUSTOMER SIDE"
+                inst_sub      = "(MOSTLY 3)"
+                inst_form_key = "cust_inst_form"
+                inst_del_key  = "del_ci"
 
-                if st.session_state.bank_insts:
-                    _bh = '<div style="background:#0f172a;border-radius:8px;padding:8px 12px;margin-top:4px">'
-                    for bi in st.session_state.bank_insts:
-                        _bh += f'<div style="display:flex;justify-content:space-between;font-size:0.8rem;padding:5px 0;border-bottom:1px solid #1e293b"><span style="color:#94a3b8">#{bi["no"]}</span><span style="font-weight:600">{format_currency(bi["amount"])}</span><span style="color:#64748b">{bi["due_date"]}</span></div>'
-                    _bh += '</div>'
-                    st.markdown(_bh, unsafe_allow_html=True)
-                    for i, bi in enumerate(st.session_state.bank_insts):
-                        if st.button(f"🗑️ Remove Bank Inst #{bi['no']}", key=f"del_bi_{i}"):
-                            st.session_state.bank_insts.pop(i); st.rerun()
+            _inst_list = st.session_state.get(inst_list_key, [])
 
-                with st.form("bank_inst_form", clear_on_submit=True):
-                    st.markdown("<div style='color:#64748b;font-size:0.75rem;margin-bottom:4px'>+ Add Installment — Amount & Date</div>", unsafe_allow_html=True)
-                    bic1, bic2, bic3 = st.columns(3)
-                    with bic1: bi_no  = st.number_input("Inst #", min_value=1, value=len(st.session_state.bank_insts)+1, key="bi_no")
-                    with bic2: bi_amt = st.number_input("Amount (₹)", min_value=0.0, step=5000.0, key="bi_amt")
-                    with bic3: bi_due = st.date_input("Date", key="bi_due")
-                    if st.form_submit_button("➕ Add Bank Installment", use_container_width=True):
-                        st.session_state.bank_insts.append({"no": int(bi_no), "amount": bi_amt, "due_date": str(bi_due), "status": "pending"})
-                        st.rerun()
-
-            # ── CASH: Customer-side installments ─────────────────
-            st.markdown("""
-            <div style="background:#1e293b;border-radius:10px;padding:12px 14px;margin-top:8px">
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
-                <span style="font-size:1rem">🏛️</span>
-                <span style="font-weight:700;font-size:0.85rem;text-transform:uppercase">Add Installments from Customer Side</span>
-              </div>
-              <div style="color:#64748b;font-size:0.72rem">(MOSTLY 3)</div>
+            st.markdown(f"""
+            <div style="background:#1e293b;border-radius:10px;padding:12px 14px;margin-top:10px">
+              <div style="font-weight:700;font-size:0.85rem;text-transform:uppercase">{inst_label}</div>
+              <div style="color:#64748b;font-size:0.72rem">{inst_sub}</div>
             </div>""", unsafe_allow_html=True)
 
-            if st.session_state.draft_insts:
-                _ih = '<div style="background:#0f172a;border-radius:8px;padding:8px 12px;margin-top:4px">'
-                for inst in st.session_state.draft_insts:
-                    _clr = "#22c55e" if inst["status"] == "paid" else "#f59e0b"
-                    _ih += f'<div style="display:flex;justify-content:space-between;font-size:0.8rem;padding:5px 0;border-bottom:1px solid #1e293b"><span style="color:#94a3b8">#{inst["no"]}</span><span style="font-weight:600">{format_currency(inst["amount"])}</span><span style="color:#64748b">{inst["due_date"]}</span><span style="color:{_clr}">{inst["status"].title()}</span></div>'
-                _ih += '</div>'
-                st.markdown(_ih, unsafe_allow_html=True)
-                for i, inst in enumerate(st.session_state.draft_insts):
-                    if st.button(f"🗑️ Remove #{inst['no']}", key=f"del_ci_{i}"):
-                        st.session_state.draft_insts.pop(i); st.rerun()
+            # Existing installments — delete button INLINE on same row
+            for i, inst in enumerate(_inst_list):
+                _clr = "#22c55e" if inst.get("status") == "paid" else "#f59e0b"
+                rc1, rc2, rc3, rc4, rc5 = st.columns([0.4, 1.2, 1.2, 0.8, 0.5])
+                rc1.markdown(f"<div style='padding-top:8px;font-size:0.8rem;color:#94a3b8'>#{inst['no']}</div>", unsafe_allow_html=True)
+                rc2.markdown(f"<div style='padding-top:8px;font-size:0.8rem;font-weight:600'>{format_currency(inst['amount'])}</div>", unsafe_allow_html=True)
+                rc3.markdown(f"<div style='padding-top:8px;font-size:0.8rem;color:#64748b'>{inst['due_date']}</div>", unsafe_allow_html=True)
+                rc4.markdown(f"<div style='padding-top:8px;font-size:0.8rem;color:{_clr}'>{inst.get('status','pending').title()}</div>", unsafe_allow_html=True)
+                if rc5.button("🗑️", key=f"{inst_del_key}_{i}", use_container_width=True):
+                    st.session_state[inst_list_key].pop(i); st.rerun()
 
-            with st.form("cust_inst_form", clear_on_submit=True):
+            # Add installment form
+            with st.form(inst_form_key, clear_on_submit=True):
                 st.markdown("<div style='color:#64748b;font-size:0.75rem;margin-bottom:4px'>+ Add Installment — Amount & Date</div>", unsafe_allow_html=True)
-                cic1, cic2, cic3 = st.columns(3)
-                with cic1: di_no  = st.number_input("Inst #", min_value=1, value=len(st.session_state.draft_insts)+1, key="di_no")
-                with cic2: di_amt = st.number_input("Amount (₹)", min_value=0.0, step=5000.0, key="di_amt")
-                with cic3: di_due = st.date_input("Date", key="di_due")
-                di_st = st.selectbox("Status", ["pending","paid"], key="di_st")
-                if st.form_submit_button("➕ Add Customer Installment", use_container_width=True):
-                    st.session_state.draft_insts.append({"no": int(di_no), "amount": di_amt, "due_date": str(di_due), "status": di_st})
+                fc1, fc2, fc3 = st.columns(3)
+                with fc1: f_no  = st.number_input("Inst #", min_value=1, value=len(_inst_list)+1, key=f"{inst_form_key}_no")
+                with fc2: f_amt = st.number_input("Amount (₹)", min_value=0.0, step=5000.0, key=f"{inst_form_key}_amt")
+                with fc3: f_due = st.date_input("Date", key=f"{inst_form_key}_due")
+                f_st = st.selectbox("Status", ["pending","paid"], key=f"{inst_form_key}_st")
+                if st.form_submit_button("➕ Add Installment", use_container_width=True):
+                    st.session_state[inst_list_key].append({
+                        "no": int(f_no), "amount": f_amt,
+                        "due_date": str(f_due), "status": f_st
+                    })
                     st.rerun()
 
         # ── SAVE button ────────────────────────────────────────────
