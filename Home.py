@@ -408,46 +408,214 @@ with t2:
                         st.rerun()
 
     with sub2:
-        with st.form("create_project_form"):
-            nc1, nc2 = st.columns(2)
-            with nc1:
-                cust_name   = st.text_input("Customer Name *")
-                location    = st.text_input("Location")
-                system_size = st.number_input("System Size (kWp)", min_value=0.0, step=0.5)
-                mobile      = st.text_input("Mobile Number")
-            with nc2:
-                status_new = st.selectbox("Status", ["planning","approved","in_progress","completed","on_hold"])
-                if role == "admin":
-                    total_c  = st.number_input("Total Cost (₹)",  min_value=0.0, step=1000.0)
-                    amount_p = st.number_input("Amount Paid (₹)", min_value=0.0, step=1000.0)
-                else:
-                    total_c  = 0.0
-                    amount_p = 0.0
-                email_c = st.text_input("Customer Email")
-            proj_code = st.text_input("Project Code (e.g. EPC-001)", placeholder="Leave blank to auto-generate")
-            notes_new = st.text_area("Notes")
+        import datetime as _dt
+        st.markdown("""
+        <div style="margin-bottom:18px">
+          <div style="font-size:1.3rem;font-weight:800">Add New Solar Project / Customer</div>
+          <div style="color:#64748b;font-size:0.85rem">Enter customer and project details to create a new solar EPC project</div>
+        </div>""", unsafe_allow_html=True)
 
-            if st.form_submit_button("➕ Create Project", use_container_width=True):
-                if not cust_name.strip():
+        # init session state
+        if "draft_insts" not in st.session_state:
+            st.session_state.draft_insts = []
+        if "np_pay_mode" not in st.session_state:
+            st.session_state.np_pay_mode = "CASH"
+
+        left_col, right_col = st.columns([1.15, 1])
+
+        # ── LEFT ──────────────────────────────────────────────────
+        with left_col:
+
+            # Section 1 — Customer Info
+            st.markdown("""<div style="background:#1e293b;border-radius:10px;padding:4px 14px 2px;margin-bottom:4px">
+              <div style="display:flex;align-items:center;gap:8px;padding:10px 0 8px">
+                <div style="background:#dc2626;color:#fff;border-radius:50%;width:22px;height:22px;
+                  display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0">1</div>
+                <span style="font-weight:700">Customer Information</span>
+              </div></div>""", unsafe_allow_html=True)
+
+            ci1, ci2, ci3 = st.columns([1.2, 1, 1])
+            with ci1: np_name    = st.text_input("Customer Name *", placeholder="Enter full name",        key="np_name")
+            with ci2: np_mobile  = st.text_input("Mobile Number *",  placeholder="+91 mobile number",     key="np_mobile")
+            with ci3: np_altmob  = st.text_input("Alternative Mobile", placeholder="+91 alternate",       key="np_altmob")
+
+            ci4, ci5, ci6 = st.columns([1.2, 1, 0.9])
+            with ci4: np_email   = st.text_input("Email Address",    placeholder="Enter email",           key="np_email")
+            with ci5: np_aadhar  = st.text_input("Aadhar Number",    placeholder="Enter Aadhar number",   key="np_aadhar")
+            with ci6: np_elecbill= st.text_input("Electricity Bill ID", placeholder="Bill ID",            key="np_elecbill")
+
+            st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+
+            # Section 2 — Site Info
+            st.markdown("""<div style="background:#1e293b;border-radius:10px;padding:4px 14px 2px;margin-bottom:4px">
+              <div style="display:flex;align-items:center;gap:8px;padding:10px 0 8px">
+                <div style="background:#dc2626;color:#fff;border-radius:50%;width:22px;height:22px;
+                  display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0">2</div>
+                <span style="font-weight:700">Site Information</span>
+              </div></div>""", unsafe_allow_html=True)
+
+            np_addr = st.text_input("Installation Address *", placeholder="Enter complete installation address", key="np_addr")
+
+            si1, si2, si3 = st.columns(3)
+            with si1: np_village  = st.text_input("Village / Locality", placeholder="Village", key="np_village")
+            with si2: np_taluka   = st.text_input("Taluka",             placeholder="Taluka",  key="np_taluka")
+            with si3: np_district = st.text_input("District",           placeholder="District",key="np_district")
+
+            si4, si5 = st.columns(2)
+            with si4: np_pin    = st.text_input("Pincode",            placeholder="Pincode",              key="np_pin")
+            with si5: np_latlng = st.text_input("Longitude, Latitude",placeholder="e.g. 72.8, 21.1",     key="np_latlng")
+
+            # Created date
+            st.markdown(f"""
+            <div style="background:#1e293b;border-radius:8px;padding:12px 14px;margin-top:10px;display:flex;align-items:center;gap:10px">
+              <span style="font-size:1.2rem">📅</span>
+              <div><div style="color:#64748b;font-size:0.7rem;text-transform:uppercase">Created Date</div>
+              <div style="font-weight:600">{_dt.date.today().strftime("%B %d, %Y")}</div></div>
+            </div>""", unsafe_allow_html=True)
+
+        # ── RIGHT ─────────────────────────────────────────────────
+        with right_col:
+
+            # Execution Partner
+            st.markdown("""<div style="background:#1e293b;border-radius:10px;padding:12px 14px;margin-bottom:8px">
+              <div style="color:#94a3b8;font-size:0.72rem;text-transform:uppercase;margin-bottom:6px">Execution Partner</div>""",
+              unsafe_allow_html=True)
+            np_exec = st.selectbox("", ["Voltedge", "Manual"], key="np_exec", label_visibility="collapsed")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # Section 3 — Project Info
+            st.markdown("""<div style="background:#1e293b;border-radius:10px;padding:4px 14px 2px;margin-bottom:4px">
+              <div style="display:flex;align-items:center;gap:8px;padding:10px 0 8px">
+                <div style="background:#dc2626;color:#fff;border-radius:50%;width:22px;height:22px;
+                  display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0">3</div>
+                <span style="font-weight:700">Project Information</span>
+              </div></div>""", unsafe_allow_html=True)
+
+            pi1, pi2 = st.columns(2)
+            with pi1: np_size  = st.number_input("System Size (kWp) *", min_value=0.0, step=0.5, key="np_size")
+            with pi2: np_conn  = st.selectbox("Connection Type *", ["On-Grid","Off-Grid","Hybrid"], key="np_conn")
+
+            np_status = st.selectbox("Project Status", ["planning","approved","in_progress","completed","on_hold"], key="np_status")
+
+            # Payment mode toggle
+            st.markdown("<div style='color:#94a3b8;font-size:0.78rem;margin:6px 0 4px'>PAYMENT MODE</div>", unsafe_allow_html=True)
+            pm1, pm2 = st.columns(2)
+            with pm1:
+                cash_style = "background:#22c55e;color:#fff;" if st.session_state.np_pay_mode=="CASH" else ""
+                if st.button("CASH", use_container_width=True, key="pm_cash"):
+                    st.session_state.np_pay_mode = "CASH"; st.rerun()
+            with pm2:
+                if st.button("LOAN", use_container_width=True, key="pm_loan"):
+                    st.session_state.np_pay_mode = "LOAN"; st.rerun()
+            st.markdown(f"<div style='font-size:0.78rem;color:#22c55e;margin-bottom:6px'>Selected: {st.session_state.np_pay_mode}</div>", unsafe_allow_html=True)
+
+            # Financial fields (admin only)
+            if role == "admin":
+                np_cost     = st.number_input("TOTAL PROJECT COST (₹)",    min_value=0.0, step=1000.0, key="np_cost")
+                np_advance  = st.number_input("ADVANCE AMOUNT (₹)",        min_value=0.0, step=1000.0, key="np_advance")
+                np_subsidy  = st.number_input("SUBSIDY AMOUNT (₹)",        min_value=0.0, step=1000.0, key="np_subsidy")
+                np_bankloan = st.number_input("BANK LOAN AMOUNT (₹)",      min_value=0.0, step=1000.0, key="np_bankloan")
+                np_bankquot = st.number_input("BANK QUOTATION AMOUNT (₹)", min_value=0.0, step=1000.0, key="np_bankquot")
+            else:
+                np_cost = np_advance = np_subsidy = np_bankloan = np_bankquot = 0.0
+
+            np_notes = st.text_area("Notes", placeholder="Any additional notes…", key="np_notes", height=68)
+
+            # ── Add Installment from Bank Side ──────────────────
+            st.markdown("""
+            <div style="background:#1e293b;border-radius:10px;padding:12px 14px;margin-top:8px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                <span style="font-size:1rem">🏦</span>
+                <span style="font-weight:700;font-size:0.9rem">ADD INSTALLMENT FROM BANK SIDE</span>
+              </div>
+              <div style="color:#64748b;font-size:0.72rem;margin-bottom:8px">(MOSTLY 2 — 70% & 30%)</div>
+            </div>""", unsafe_allow_html=True)
+
+            # Show draft installments
+            if st.session_state.draft_insts:
+                for i, inst in enumerate(st.session_state.draft_insts):
+                    ic1, ic2, ic3, ic4 = st.columns([0.5, 1.2, 1.2, 0.4])
+                    ic1.markdown(f"<div style='padding-top:8px;font-size:0.8rem'>#{inst['no']}</div>", unsafe_allow_html=True)
+                    ic2.markdown(f"<div style='padding-top:8px;font-size:0.8rem'>{format_currency(inst['amount'])}</div>", unsafe_allow_html=True)
+                    ic3.markdown(f"<div style='padding-top:8px;font-size:0.8rem'>{inst['due_date']}</div>", unsafe_allow_html=True)
+                    if ic4.button("🗑️", key=f"del_di_{i}"):
+                        st.session_state.draft_insts.pop(i); st.rerun()
+
+            # Add installment expander
+            with st.expander("➕  Add Installment"):
+                with st.form("add_inst_draft"):
+                    dac1, dac2 = st.columns(2)
+                    with dac1:
+                        di_no  = st.number_input("Installment #", min_value=1, value=len(st.session_state.draft_insts)+1, key="di_no")
+                        di_amt = st.number_input("Amount (₹)", min_value=0.0, step=5000.0, key="di_amt")
+                    with dac2:
+                        di_due = st.date_input("Due Date", key="di_due")
+                        di_st  = st.selectbox("Status", ["pending","paid"], key="di_st")
+                    if st.form_submit_button("➕ Add", use_container_width=True):
+                        st.session_state.draft_insts.append({
+                            "no": int(di_no), "amount": di_amt,
+                            "due_date": str(di_due), "status": di_st
+                        })
+                        st.rerun()
+
+        # ── SAVE button ────────────────────────────────────────────
+        st.markdown("<div style='margin-top:16px'></div>", unsafe_allow_html=True)
+        scol1, scol2 = st.columns([3, 1])
+        with scol1:
+            if st.button("💾  SAVE Project", use_container_width=True, key="save_project_btn",
+                         type="primary"):
+                if not st.session_state.get("np_name","").strip():
                     st.error("❌ Customer name is required.")
                 else:
                     result = create_project(supabase, {
-                        "customer_name":   cust_name.strip(),
-                        "project_code":    proj_code.strip() or None,
-                        "location":        location,
-                        "mobile":          mobile,
-                        "email":           email_c,
-                        "system_size_kwp": system_size,
-                        "project_status":  status_new,
-                        "total_cost":      total_c,
-                        "amount_paid":     amount_p,
-                        "balance":         total_c - amount_p,
-                        "net_payable":     total_c,
-                        "notes":           notes_new,
+                        "customer_name":        st.session_state.np_name.strip(),
+                        "mobile":               st.session_state.get("np_mobile",""),
+                        "alt_mobile":           st.session_state.get("np_altmob",""),
+                        "email":                st.session_state.get("np_email",""),
+                        "aadhar_number":        st.session_state.get("np_aadhar",""),
+                        "electricity_bill_id":  st.session_state.get("np_elecbill",""),
+                        "location":             st.session_state.get("np_addr",""),
+                        "installation_address": st.session_state.get("np_addr",""),
+                        "village":              st.session_state.get("np_village",""),
+                        "taluka":               st.session_state.get("np_taluka",""),
+                        "district":             st.session_state.get("np_district",""),
+                        "pincode":              st.session_state.get("np_pin",""),
+                        "longitude_latitude":   st.session_state.get("np_latlng",""),
+                        "execution_partner":    st.session_state.get("np_exec","Voltedge"),
+                        "system_size_kwp":      st.session_state.get("np_size", 0),
+                        "connection_type":      st.session_state.get("np_conn","On-Grid"),
+                        "project_status":       st.session_state.get("np_status","planning"),
+                        "payment_mode":         st.session_state.get("np_pay_mode","CASH"),
+                        "total_cost":           np_cost,
+                        "amount_paid":          np_advance,
+                        "advance_amount":       np_advance,
+                        "subsidy_amount":       np_subsidy,
+                        "bank_loan_amount":     np_bankloan,
+                        "bank_quotation_amount":np_bankquot,
+                        "balance":              np_cost - np_advance,
+                        "net_payable":          np_cost - np_subsidy,
+                        "notes":                st.session_state.get("np_notes",""),
                     })
                     if result:
-                        st.success("✅ Project created! Open it via 📂 to add steps, payments & docs.")
+                        # Save draft installments
+                        for inst in st.session_state.draft_insts:
+                            supabase.table("installments").insert({
+                                "project_id":     result["id"],
+                                "installment_no": inst["no"],
+                                "amount":         inst["amount"],
+                                "due_date":       inst["due_date"],
+                                "status":         inst["status"],
+                            }).execute()
+                        st.session_state.draft_insts = []
+                        st.success("✅ Project created! Open it via 📂 to manage steps & documents.")
                         st.rerun()
+        with scol2:
+            if st.button("🗑️  Clear", use_container_width=True, key="clear_project_btn"):
+                for k in ["np_name","np_mobile","np_altmob","np_email","np_aadhar","np_elecbill",
+                          "np_addr","np_village","np_taluka","np_district","np_pin","np_latlng",
+                          "np_exec","np_size","np_conn","np_status","np_notes","draft_insts"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
