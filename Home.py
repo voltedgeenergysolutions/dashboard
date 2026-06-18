@@ -465,13 +465,10 @@ with t2:
             with si4: np_pin    = st.text_input("Pincode",            placeholder="Pincode",              key="np_pin")
             with si5: np_latlng = st.text_input("Longitude, Latitude",placeholder="e.g. 72.8, 21.1",     key="np_latlng")
 
-            # Created date
-            st.markdown(f"""
-            <div style="background:#1e293b;border-radius:8px;padding:12px 14px;margin-top:10px;display:flex;align-items:center;gap:10px">
-              <span style="font-size:1.2rem">📅</span>
-              <div><div style="color:#64748b;font-size:0.7rem;text-transform:uppercase">Created Date</div>
-              <div style="font-weight:600">{_dt.date.today().strftime("%B %d, %Y")}</div></div>
-            </div>""", unsafe_allow_html=True)
+            # Created date — user selects via calendar
+            st.markdown("<div style='background:#1e293b;border-radius:8px;padding:10px 14px;margin-top:10px'><div style='color:#64748b;font-size:0.7rem;text-transform:uppercase;margin-bottom:4px'>📅 CREATED DATE</div>", unsafe_allow_html=True)
+            np_created_date = st.date_input("", value=_dt.date.today(), key="np_created_date", label_visibility="collapsed")
+            st.markdown("</div>", unsafe_allow_html=True)
 
         # ── RIGHT ─────────────────────────────────────────────────
         with right_col:
@@ -615,6 +612,7 @@ with t2:
                         "balance":              np_cost - np_advance,
                         "net_payable":          np_cost - np_subsidy,
                         "notes":                st.session_state.get("np_notes",""),
+                        "created_at":           str(st.session_state.get("np_created_date", _dt.date.today())),
                     })
                     if result:
                         # Save customer-side installments
