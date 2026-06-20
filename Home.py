@@ -2,11 +2,30 @@
 
 import streamlit as st
 import sys
+import base64
 import pandas as pd
 import plotly.graph_objects as go
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+
+@st.cache_data(show_spinner=False)
+def _load_logo_cached(path_str, _mtime):
+    """Cached by path + modified-time so a replaced logo auto-refreshes."""
+    p = Path(path_str)
+    ext  = p.suffix.lstrip(".").lower()
+    mime = "svg+xml" if ext == "svg" else ext
+    return base64.b64encode(p.read_bytes()).decode(), mime
+
+
+def _load_logo():
+    """Return (base64, mime) for streamlit_app/assets/logo.* if present, else (None, None)."""
+    for ext in ("png", "jpg", "jpeg", "webp", "svg"):
+        p = Path(__file__).parent / "assets" / f"logo.{ext}"
+        if p.exists():
+            return _load_logo_cached(str(p), p.stat().st_mtime)
+    return None, None
 
 from modules.supabase_client import (
     get_supabase_client, get_projects, get_project_by_id,
@@ -18,6 +37,8 @@ from modules.auth import (
 )
 from modules.utils import format_currency
 from modules.project_detail import render_project_detail
+from modules.epc import render_epc_page
+from modules.reports import render_reports
 
 # ── Helper functions (must be defined before any tab code) ────────────────────
 
@@ -51,23 +72,30 @@ def _render_activity_feed(logs):
         avatar  = (f'<img src="{pic}" style="width:28px;height:28px;border-radius:50%;vertical-align:middle">'
                    if pic else '<span style="width:28px;height:28px;border-radius:50%;background:#334155;'
                                'display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem">👤</span>')
+        # escape any HTML in user-entered fields so logged content can't break/show as markup
+        import html as _html
+        action  = _html.escape(str(action))
+        details = _html.escape(str(details))
+        name    = _html.escape(str(name))
+        email   = _html.escape(str(email))
+        project = _html.escape(str(project))
         proj_html    = f'<span style="color:#64748b"> · {project}</span>' if project else ""
         details_html = (f'<div style="font-size:0.72rem;color:#475569;margin-top:2px;'
                         f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{details}</div>'
                         if details else "")
-        html += f"""
-        <div style="display:flex;align-items:flex-start;padding:10px 16px;border-bottom:1px solid #334155;gap:10px">
-          <div style="flex-shrink:0;margin-top:2px">{avatar}</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:0.82rem">
-              <span style="font-weight:700;color:#f1f5f9">{name}</span>
-              <span style="color:#94a3b8;font-size:0.75rem;margin-left:6px">{email}</span>
-            </div>
-            <div style="font-size:0.82rem;color:#cbd5e1;margin-top:2px">{icon} {action}{proj_html}</div>
-            {details_html}
-          </div>
-          <div style="font-size:0.72rem;color:#475569;flex-shrink:0;white-space:nowrap">{ago}</div>
-        </div>"""
+        # compact, single-line HTML (no leading indentation → markdown renders as HTML, not a code block)
+        html += (
+            '<div style="display:flex;align-items:flex-start;padding:10px 16px;border-bottom:1px solid #334155;gap:10px">'
+            f'<div style="flex-shrink:0;margin-top:2px">{avatar}</div>'
+            '<div style="flex:1;min-width:0">'
+            f'<div style="font-size:0.82rem"><span style="font-weight:700;color:#f1f5f9">{name}</span>'
+            f'<span style="color:#94a3b8;font-size:0.75rem;margin-left:6px">{email}</span></div>'
+            f'<div style="font-size:0.82rem;color:#cbd5e1;margin-top:2px">{icon} {action}{proj_html}</div>'
+            f'{details_html}'
+            '</div>'
+            f'<div style="font-size:0.72rem;color:#475569;flex-shrink:0;white-space:nowrap">{ago}</div>'
+            '</div>'
+        )
     html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
 
@@ -82,6 +110,9 @@ st.set_page_config(
 st.markdown("""
 <style>
   #MainMenu, footer { visibility: hidden; }
+  /* Deep-navy theme to match the reference design */
+  .stApp { background: #0a1322 !important; }
+  [data-testid="stAppViewContainer"], [data-testid="stMain"] { background: #0a1322 !important; }
   /* Keep header transparent so the sidebar expand arrow stays usable */
   header[data-testid="stHeader"] { background: transparent !important; }
   /* Hide only the Deploy button / status widget, NOT the sidebar toggle */
@@ -112,18 +143,31 @@ st.markdown("""
   section[data-testid="stSidebar"] div[class*="st-key-nav_"] button:hover {
       background: #1e293b !important; color: #f1f5f9 !important;
   }
-  section[data-testid="stSidebar"] div[class*="st-key-nav_"] button[kind="primary"] {
-      background: #dc262622 !important; color: #ef4444 !important;
-      border-left: 3px solid #dc2626 !important;
+  section[data-testid="stSidebar"] div[class*="st-key-nav_"] button[kind="primary"],
+  section[data-testid="stSidebar"] div[class*="st-key-subnav_"] button[kind="primary"] {
+      background: linear-gradient(90deg, #5b1212, #7f1d1d) !important;
+      color: #fca5a5 !important; border: 1px solid #b91c1c !important;
+      border-radius: 10px !important; font-weight: 700 !important;
   }
   section[data-testid="stSidebar"] div[class*="st-key-subnav_"] button {
       background: transparent !important; border: none !important; box-shadow: none !important;
-      justify-content: flex-start !important; color: #64748b !important;
-      font-weight: 500 !important; font-size: 0.82rem !important; padding: 5px 14px 5px 30px !important;
+      justify-content: flex-start !important; color: #cbd5e1 !important;
+      font-weight: 500 !important; font-size: 0.86rem !important; padding: 7px 14px 7px 26px !important;
   }
-  section[data-testid="stSidebar"] div[class*="st-key-subnav_"] button:hover { color: #f1f5f9 !important; }
-  section[data-testid="stSidebar"] div[class*="st-key-subnav_"] button[kind="primary"] {
-      color: #f97316 !important;
+  section[data-testid="stSidebar"] div[class*="st-key-subnav_"] button:hover { color: #f1f5f9 !important; background:#1e293b !important; }
+
+  /* Logout as a red text link, not a boxed button */
+  section[data-testid="stSidebar"] div[class*="st-key-sidebar_logout"] button {
+      background: transparent !important; border: none !important; box-shadow: none !important;
+      color: #ef4444 !important; justify-content: flex-start !important;
+      font-weight: 700 !important; padding: 6px 10px !important;
+  }
+  section[data-testid="stSidebar"] div[class*="st-key-sidebar_logout"] button:hover { color: #f87171 !important; }
+
+  /* Add-Project section cards (bordered containers keyed npcard_*) */
+  div[class*="st-key-npcard_"] {
+      background: #0d1a2e !important; border: 1px solid #16304d !important;
+      border-radius: 12px !important; padding: 10px 16px 4px !important; margin-bottom: 10px !important;
   }
   .stTabs [data-baseweb="tab-list"] {
       gap: 6px; background: #1e293b; padding: 6px; border-radius: 10px;
@@ -171,15 +215,29 @@ handle_oauth_callback()
 
 # ── LOGIN ─────────────────────────────────────────────────────────────────────
 if not st.session_state.get("authenticated", False):
+    # Clean standalone first page — hide the (empty) sidebar & its toggle
+    st.markdown("""
+    <style>
+      section[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display:none !important; }
+      [data-testid="stAppViewContainer"] > .main { background: radial-gradient(1200px 600px at 50% -10%, #102036 0%, #0a1322 60%); }
+    </style>""", unsafe_allow_html=True)
     _, mid, _ = st.columns([1, 1.4, 1])
     with mid:
-        st.markdown("""
-        <div style="text-align:center;padding:60px 0 28px">
-          <div style="font-size:3rem">⚡</div>
-          <div style="font-size:2rem;font-weight:800;color:#dc2626;letter-spacing:1px">VOLTEDGE</div>
-          <div style="color:#64748b;margin-top:4px;font-size:0.95rem">Energy Solutions · Solar Dashboard</div>
-        </div>
-        """, unsafe_allow_html=True)
+        _lb64, _lmime = _load_logo()
+        if _lb64:
+            st.markdown(
+                f'<div style="text-align:center;padding:90px 0 14px">'
+                f'<img src="data:image/{_lmime};base64,{_lb64}" style="width:100%;max-width:340px">'
+                f'<div style="color:#94a3b8;margin-top:14px;font-size:1rem;letter-spacing:0.5px">Solar Project Management Dashboard</div></div>',
+                unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="text-align:center;padding:60px 0 28px">
+              <div style="font-size:3rem">⚡</div>
+              <div style="font-size:2rem;font-weight:800;color:#dc2626;letter-spacing:1px">VOLTEDGE</div>
+              <div style="color:#64748b;margin-top:4px;font-size:0.95rem">Energy Solutions · Solar Dashboard</div>
+            </div>
+            """, unsafe_allow_html=True)
         login_form()
     st.stop()
 
@@ -253,7 +311,7 @@ comp_pct    = round(completed / total * 100, 1) if total else 0.0
 def render_header(extra_key=""):
     hc1, hc2 = st.columns([4, 1])
     with hc1:
-        name = st.session_state.get("user_name") or st.session_state.get("user_email","User")
+        name = st.session_state.get("user_code", "VE-001")
         pic  = st.session_state.get("user_picture","")
         role_badge = "🔴 Admin" if role == "admin" else "🟡 Employee"
         if pic:
@@ -290,59 +348,75 @@ def render_sidebar():
     cur = st.session_state.nav
 
     with st.sidebar:
-        # Logo
-        st.markdown("""
-        <div style="display:flex;align-items:center;gap:10px;padding:6px 8px 18px">
-          <div style="background:#16a34a;color:#fff;font-weight:800;border-radius:8px;
-                      width:38px;height:38px;display:flex;align-items:center;justify-content:center;font-size:1rem">VE</div>
-          <div style="line-height:1.1">
-            <div style="font-weight:800;font-size:1.05rem;color:#f1f5f9;letter-spacing:0.5px">VOLT<span style="color:#16a34a">EDGE</span></div>
-            <div style="font-size:0.58rem;color:#64748b;letter-spacing:2px">ENERGY SOLUTIONS</div>
-          </div>
-        </div>""", unsafe_allow_html=True)
+        # Logo — use real logo image if provided, else fallback badge
+        _logo_b64, _logo_mime = _load_logo()
+        if _logo_b64:
+            st.markdown(
+                f'<div style="padding:8px 4px 18px;text-align:center">'
+                f'<img src="data:image/{_logo_mime};base64,{_logo_b64}" style="width:100%;max-width:215px">'
+                f'</div>', unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="display:flex;align-items:center;gap:12px;padding:6px 6px 20px">
+              <div style="background:#0b1626;border:2.5px solid #16a34a;color:#16a34a;font-weight:800;
+                          border-radius:50%;width:46px;height:46px;display:flex;align-items:center;
+                          justify-content:center;font-size:1.05rem;flex-shrink:0">VE</div>
+              <div style="line-height:1.15">
+                <div style="font-weight:800;font-size:1.2rem;color:#f1f5f9;letter-spacing:0.5px">VOLT<span style="color:#16a34a">EDGE</span></div>
+                <div style="font-size:0.55rem;color:#64748b;letter-spacing:2px">— ENERGY SOLUTIONS —</div>
+              </div>
+            </div>""", unsafe_allow_html=True)
 
-        def nav_btn(label, icon, key):
-            if st.button(f"{icon}  {label}", key=f"nav_{key}", use_container_width=True,
+        def nav_btn(label, icon, key, chevron=False):
+            txt = f"{icon}  {label}" + ("   ⌄" if chevron else "")
+            if st.button(txt, key=f"nav_{key}", use_container_width=True,
                          type="primary" if cur == label else "secondary"):
                 st.session_state.nav = label
                 st.session_state.selected_project_id = None
                 st.rerun()
 
         def subnav_btn(label, icon, key):
-            active = cur == label
             if st.button(f"{icon}  {label}", key=f"subnav_{key}", use_container_width=True,
-                         type="primary" if active else "secondary"):
+                         type="primary" if cur == label else "secondary"):
                 st.session_state.nav = label
                 st.session_state.selected_project_id = None
                 st.rerun()
 
-        nav_btn("Overview", "🏠", "overview")
+        nav_btn("Overview", "🏠", "overview", chevron=True)
 
-        st.markdown("<div style='color:#64748b;font-size:0.72rem;font-weight:700;padding:8px 14px 2px'>👥 EDIT CUSTOMERS</div>", unsafe_allow_html=True)
-        subnav_btn("Customer List", "📋", "custlist")
-        subnav_btn("Add Project",   "➕", "addproj")
+        # Edit Customers — group row (navigates to Customer List)
+        _ec_active = cur in ("Customer List", "Add Project")
+        if st.button("👥  Edit Customers   ⌄", key="nav_editcust", use_container_width=True,
+                     type="primary" if _ec_active else "secondary"):
+            st.session_state.nav = "Customer List"
+            st.session_state.selected_project_id = None
+            st.rerun()
+        subnav_btn("Customer List", "☰", "custlist")
+        subnav_btn("Add Project",   "＋", "addproj")
 
         if role == "admin":
             nav_btn("Report", "📊", "report")
+            nav_btn("EPC Partners", "🏭", "epc")
             nav_btn("Users",  "👤", "users")
         nav_btn("Settings", "⚙️", "settings")
 
-        # spacer + user card pinned near bottom
-        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+        # user card pinned near bottom
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         st.markdown("<hr style='margin:8px 0;border-color:#1e293b'>", unsafe_allow_html=True)
         uname = st.session_state.get("user_name") or st.session_state.get("user_email", "User")
-        urole = "Admin" if role == "admin" else "Employee"
+        ucode = st.session_state.get("user_code", "VE-001")
+        urole = "Admin" if role == "admin" else "Engineer"
         upic  = st.session_state.get("user_picture", "")
-        ava   = (f'<img src="{upic}" style="width:38px;height:38px;border-radius:50%">' if upic
-                 else '<div style="width:38px;height:38px;border-radius:50%;background:#16a34a;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff">'
+        ava   = (f'<img src="{upic}" style="width:44px;height:44px;border-radius:50%;object-fit:cover">' if upic
+                 else '<div style="width:44px;height:44px;border-radius:50%;background:#16a34a;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:1.1rem">'
                       + (uname[:1].upper() if uname else "U") + '</div>')
         st.markdown(f"""
-        <div style="display:flex;align-items:center;gap:10px;padding:4px 8px">
+        <div style="display:flex;align-items:center;gap:12px;padding:6px 8px 4px">
           {ava}
-          <div style="line-height:1.2">
-            <div style="font-weight:700;font-size:0.9rem;color:#f1f5f9">{uname}</div>
-            <div style="font-size:0.7rem;color:#64748b">{urole}</div>
-            <div style="font-size:0.66rem;color:#22c55e">● Online</div>
+          <div style="line-height:1.25">
+            <div style="font-weight:700;font-size:0.95rem;color:#f1f5f9">{ucode}</div>
+            <div style="font-size:0.74rem;color:#94a3b8">{urole}</div>
+            <div style="font-size:0.68rem;color:#22c55e">● Online</div>
           </div>
         </div>""", unsafe_allow_html=True)
         if st.button("⏻  Logout", key="sidebar_logout", use_container_width=True):
@@ -374,33 +448,23 @@ render_header("main")
 # ══════════════════════════════════════════════════════════════════════════════
 if nav == "Overview":
     from datetime import datetime as _dtnow
-    _now   = _dtnow.now()
-    _hr    = _now.hour
-    _greet = "Good Morning" if _hr < 12 else ("Good Afternoon" if _hr < 17 else "Good Evening")
-    _uname = st.session_state.get("user_name") or st.session_state.get("user_email", "User")
-
-    # ── Greeting banner ───────────────────────────────────────────
-    st.markdown(f"""
-    <div style="background:#0f1b2e;border:1px solid #1e293b;border-radius:12px;padding:16px 20px;margin-bottom:14px">
-      <div style="font-size:1.35rem;font-weight:800;color:#f1f5f9">{_greet}, {_uname} 👋</div>
-      <div style="color:#64748b;font-size:0.86rem;margin-top:2px">Here's what's happening with your projects today.</div>
-    </div>""", unsafe_allow_html=True)
+    _now = _dtnow.now()
 
     # ── compute stats ─────────────────────────────────────────────
     _mon = _now.strftime("%Y-%m")
     completed_month = sum(1 for p in projects
                           if p.get("project_status") == "completed"
                           and str(p.get("updated_at") or p.get("created_at") or "")[:7] == _mon) or completed
-    subsidy_pending = sum(1 for p in projects
-                          if float(p.get("subsidy_amount", 0) or 0) > 0
-                          and (p.get("subsidy_status") or "pending") != "disbursed")
+    subsidy_pending   = sum(1 for p in projects
+                            if float(p.get("subsidy_amount", 0) or 0) > 0
+                            and (p.get("subsidy_status") or "pending") != "disbursed")
+    subsidy_disbursed = sum(1 for p in projects
+                            if (p.get("subsidy_status") or "").lower() == "disbursed")
     try:
         _pend_inst = supabase.table("installments").select("project_id,due_date,status").execute().data or []
     except Exception:
         _pend_inst = []
     _today = _now.strftime("%Y-%m-%d")
-    today_followups = sum(1 for i in _pend_inst
-                          if i.get("status") == "pending" and str(i.get("due_date", ""))[:10] == _today)
     due_by_proj = {}
     for i in _pend_inst:
         if i.get("status") == "pending" and i.get("due_date"):
@@ -423,11 +487,30 @@ if nav == "Overview":
     left, right = st.columns([2, 1.35])
     with left:
         sc_a, sc_b = st.columns(2)
-        sc_a.markdown(_stat_card("💼", "#2563eb", active,          "Active Projects",  "In Progress"), unsafe_allow_html=True)
-        sc_b.markdown(_stat_card("✅", "#16a34a", completed_month, "Completed",        "This month"),  unsafe_allow_html=True)
+        sc_a.markdown(_stat_card("💼", "#2563eb", active,            "Active Projects",   "In Progress"), unsafe_allow_html=True)
+        sc_b.markdown(_stat_card("✅", "#16a34a", completed_month,   "Completed",         "This month"),  unsafe_allow_html=True)
         sc_c, sc_d = st.columns(2)
-        sc_c.markdown(_stat_card("📅", "#dc2626", today_followups, "Today's Follow Ups", "Due Today"),  unsafe_allow_html=True)
-        sc_d.markdown(_stat_card("🏛️", "#16a34a", subsidy_pending, "Subsidy",          "Pending"),     unsafe_allow_html=True)
+        sc_c.markdown(_stat_card("🏛️", "#16a34a", subsidy_disbursed, "Subsidy Disbursed", "Received"),    unsafe_allow_html=True)
+        sc_d.markdown(_stat_card("⏳", "#f59e0b", subsidy_pending,   "Subsidy",           "Pending"),     unsafe_allow_html=True)
+
+        # Projects by Status — fills the space under the stat cards
+        if not df.empty and "project_status" in df.columns:
+            with st.container(border=True, key="npcard_pie"):
+                st.markdown('<div style="font-weight:700;font-size:0.9rem;color:#e2e8f0;margin-bottom:4px">📊 PROJECTS BY STATUS</div>', unsafe_allow_html=True)
+                _sc  = df["project_status"].value_counts()
+                _clr = {"completed":"#22c55e","in_progress":"#3b82f6","planning":"#f59e0b",
+                        "approved":"#8b5cf6","on_hold":"#f97316","cancelled":"#ef4444"}
+                _figd = go.Figure(go.Pie(
+                    labels=_sc.index, values=_sc.values, hole=0.62,
+                    marker_colors=[_clr.get(s, "#94a3b8") for s in _sc.index],
+                    textinfo="label+value", textfont_size=10,
+                ))
+                _figd.add_annotation(text=f"<b>{total}</b><br>Total", x=0.5, y=0.5,
+                                     font=dict(size=14, color="#f1f5f9"), showarrow=False)
+                _figd.update_layout(height=240, margin=dict(t=6, b=6, l=6, r=6),
+                                    paper_bgcolor="rgba(0,0,0,0)", font_color="#f1f5f9",
+                                    showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0)", font_size=10))
+                st.plotly_chart(_figd, use_container_width=True, key="ov_pie")
 
     with right:
         st.markdown('<div style="background:#0f1b2e;border:1px solid #1e293b;border-radius:12px;padding:16px 18px">', unsafe_allow_html=True)
@@ -510,26 +593,77 @@ if nav == "Overview":
         if rcq[6].button("📂", key=f"ovq_{p['id']}", help="Open project"):
             st.session_state.selected_project_id = p["id"]; st.rerun()
 
-    # ── Pie chart (extra) ─────────────────────────────────────────
-    if not df.empty and "project_status" in df.columns:
-        st.markdown("<hr style='margin:18px 0 10px'>", unsafe_allow_html=True)
-        pcol, _ = st.columns([1, 1])
-        with pcol:
-            st.markdown("**Projects by Status**")
-            sc  = df["project_status"].value_counts()
-            clr = {"completed":"#22c55e","in_progress":"#3b82f6","planning":"#f59e0b",
-                   "approved":"#8b5cf6","on_hold":"#f97316","cancelled":"#ef4444"}
-            fig_d = go.Figure(go.Pie(
-                labels=sc.index, values=sc.values, hole=0.62,
-                marker_colors=[clr.get(s,"#94a3b8") for s in sc.index],
-                textinfo="label+value", textfont_size=11,
-            ))
-            fig_d.add_annotation(text=f"<b>{total}</b><br>Total",
-                                  x=0.5, y=0.5, font=dict(size=15,color="#f1f5f9"), showarrow=False)
-            fig_d.update_layout(height=270, margin=dict(t=10,b=10,l=10,r=10),
-                                paper_bgcolor="rgba(0,0,0,0)", font_color="#f1f5f9",
-                                showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0)", font_size=11))
-            st.plotly_chart(fig_d, use_container_width=True)
+    # ══════════════════════════════════════════════════════════════
+    #  ADMIN-ONLY OVERVIEW EXTRAS (employees never see this)
+    # ══════════════════════════════════════════════════════════════
+    if role == "admin":
+        st.markdown("<hr style='margin:20px 0 10px;border-color:#16304d'>", unsafe_allow_html=True)
+        st.markdown("### 🛡️ Admin Insights")
+
+        # ── Company financial KPIs ────────────────────────────────
+        _coll = round(total_paid / total_cost * 100, 1) if total_cost else 0
+        fk = st.columns(4)
+        fk[0].markdown(_stat_card("💰", "#2563eb", format_currency(total_cost),  "Total Project Value", f"{total} projects"), unsafe_allow_html=True)
+        fk[1].markdown(_stat_card("✅", "#16a34a", format_currency(total_paid),  "Amount Received",     f"Collection {_coll}%"), unsafe_allow_html=True)
+        fk[2].markdown(_stat_card("⏳", "#dc2626", format_currency(balance_due), "Outstanding Due",     "to be collected"), unsafe_allow_html=True)
+        fk[3].markdown(_stat_card("📈", "#a78bfa", f"{comp_pct}%",               "Completion Rate",     f"{completed} done"), unsafe_allow_html=True)
+
+        # ── Employee performance ──────────────────────────────────
+        st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+        st.markdown("#### 👷 Employee Performance")
+        try:
+            _all_u = supabase.table("app_users").select("*").execute().data or []
+        except Exception:
+            _all_u = []
+        emp_users      = [u for u in _all_u if u.get("status") == "approved" and u.get("role") != "admin"]
+        pending_count  = sum(1 for u in _all_u if u.get("status") == "pending")
+
+        from collections import defaultdict as _dd
+        logs_all = get_activity_logs(supabase, limit=500)
+        by_email = _dd(lambda: {"actions": 0, "projects": set(), "last": None})
+        for lg in logs_all:                       # logs are newest-first
+            em = lg.get("user_email")
+            if not em:
+                continue
+            d = by_email[em]
+            d["actions"] += 1
+            if lg.get("project_name"):
+                d["projects"].add(lg.get("project_name"))
+            if d["last"] is None:
+                d["last"] = lg.get("created_at")
+
+        if pending_count:
+            st.warning(f"🔔 {pending_count} user(s) awaiting approval — see the **Users** page.")
+
+        if emp_users:
+            perf_rows = []
+            for u in emp_users:
+                em = u.get("email")
+                d  = by_email.get(em, {"actions": 0, "projects": set(), "last": None})
+                perf_rows.append({
+                    "Employee": u.get("name") or em,
+                    "Code":     u.get("employee_code", "-"),
+                    "Actions":  d["actions"],
+                    "Projects Touched": len(d["projects"]),
+                    "Last Active": _time_ago(d["last"]) if d["last"] else "—",
+                })
+            perf_rows.sort(key=lambda r: r["Actions"], reverse=True)
+            pcol1, pcol2 = st.columns([1.3, 1])
+            with pcol1:
+                st.dataframe(pd.DataFrame(perf_rows), use_container_width=True, hide_index=True)
+            with pcol2:
+                _names = [r["Employee"] for r in perf_rows][:8]
+                _acts  = [r["Actions"] for r in perf_rows][:8]
+                _figp = go.Figure(go.Bar(y=_names, x=_acts, orientation="h", marker_color="#3b82f6",
+                                         text=_acts, textposition="outside"))
+                _figp.update_layout(height=max(180, 34 * len(_names)), margin=dict(t=10, b=10, l=10, r=10),
+                                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                                    font_color="#cbd5e1", showlegend=False,
+                                    xaxis=dict(gridcolor="#16304d", title="Actions"),
+                                    yaxis=dict(autorange="reversed"))
+                st.plotly_chart(_figp, use_container_width=True, key="ov_emp_perf")
+        else:
+            st.caption("No approved employees yet.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -544,7 +678,7 @@ if nav in ("Customer List", "Add Project"):
             if st.button("＋ Add New Project", use_container_width=True, type="primary", key="goto_add"):
                 st.session_state.nav = "Add Project"; st.rerun()
         with tb2:
-            ec_search = st.text_input("", placeholder="🔍  Search Customer Name / Mobile / Project ID...",
+            ec_search = st.text_input("", placeholder="🔍  Search Customer Name / Mobile / Project ID / EPC Name...",
                                       key="ec_search", label_visibility="collapsed")
         with tb3:
             ec_status = st.selectbox("", ["All Status","Active","Completed","Cancelled"],
@@ -553,9 +687,14 @@ if nav in ("Customer List", "Add Project"):
         # ── Filter data ──────────────────────────────────────────
         filtered = df.copy() if not df.empty else pd.DataFrame()
         if not filtered.empty:
+            # derived display IDs so search can match the EPC name / Project ID shown in the table
+            filtered["_epc_disp"] = filtered.apply(
+                lambda r: r.get("project_code") or f"EPC-{str(r['id'])[:8].upper()}", axis=1)
+            filtered["_pid_disp"] = filtered.apply(
+                lambda r: r.get("project_code") or f"PRJ-{str(r['id'])[:6].upper()}", axis=1)
             if ec_search:
                 mask = pd.Series(False, index=filtered.index)
-                for col in ("customer_name","mobile","project_code"):
+                for col in ("customer_name","mobile","project_code","epc_name","_epc_disp","_pid_disp"):
                     if col in filtered.columns:
                         mask |= filtered[col].astype(str).str.contains(ec_search, case=False, na=False)
                 filtered = filtered[mask]
@@ -574,6 +713,12 @@ if nav in ("Customer List", "Add Project"):
 
         st.markdown(f"<div style='color:#64748b;font-size:0.8rem;margin:6px 0'>Total: {len(filtered)} Projects</div>", unsafe_allow_html=True)
 
+        # reset to page 1 whenever the search/filter/sort changes
+        _filter_sig = f"{ec_search}|{ec_status}|{st.session_state.get('ec_sort_dir','desc')}"
+        if st.session_state.get("ec_filter_sig") != _filter_sig:
+            st.session_state.ec_filter_sig = _filter_sig
+            st.session_state.ec_page = 1
+
         # ── Two-column layout: list + quick edit ─────────────────
         list_col, qe_col = st.columns([2, 1])
 
@@ -581,7 +726,7 @@ if nav in ("Customer List", "Add Project"):
             # Table header — DUE AMOUNT has a clickable sort arrow
             hd1,hd2,hd3,hd4,hd5,hd6,hd7 = st.columns([1.6,1,1,1,0.9,0.9,0.4])
             _hstyle = "font-size:0.7rem;font-weight:700;color:#f97316;padding-top:6px"
-            hd1.markdown(f"<div style='{_hstyle}'>CUST NAME</div>", unsafe_allow_html=True)
+            hd1.markdown(f"<div style='{_hstyle}'>PROJECT NAME</div>", unsafe_allow_html=True)
             hd2.markdown(f"<div style='{_hstyle}'>PROJECT ID</div>", unsafe_allow_html=True)
             hd3.markdown(f"<div style='{_hstyle}'>MOBILE</div>", unsafe_allow_html=True)
             hd4.markdown(f"<div style='{_hstyle}'>EPC NAME</div>", unsafe_allow_html=True)
@@ -597,7 +742,14 @@ if nav in ("Customer List", "Add Project"):
             if filtered.empty:
                 st.info("No projects found.")
             else:
-                for _, row in filtered.iterrows():
+                PAGE_SIZE = 20
+                _n     = len(filtered)
+                _pages = max(1, (_n + PAGE_SIZE - 1) // PAGE_SIZE)
+                _pg    = min(max(1, int(st.session_state.get("ec_page", 1))), _pages)
+                st.session_state.ec_page = _pg
+                _start = (_pg - 1) * PAGE_SIZE
+                _page_df = filtered.iloc[_start:_start + PAGE_SIZE]
+                for _, row in _page_df.iterrows():
                     _st    = row.get("project_status","")
                     _bal   = float(row.get("balance", 0) or 0)
                     _code  = row.get("project_code") or f"EPC-{str(row['id'])[:8].upper()}"
@@ -622,8 +774,30 @@ if nav in ("Customer List", "Add Project"):
                     if rc7.button("📂", key=f"open_detail_{row['id']}", help="Open full project details"):
                         st.session_state.selected_project_id = row["id"]; st.rerun()
 
+                # ── Pagination controls (20 per page) ─────────────
+                if _pages > 1:
+                    st.markdown(
+                        f"<div style='color:#64748b;font-size:0.72rem;margin:8px 0 4px'>"
+                        f"Showing {_start+1}–{min(_start+PAGE_SIZE, _n)} of {_n} · Page {_pg} of {_pages}</div>",
+                        unsafe_allow_html=True)
+                    _win = 7
+                    _lo  = max(1, _pg - _win // 2)
+                    _hi  = min(_pages, _lo + _win - 1)
+                    _lo  = max(1, _hi - _win + 1)
+                    _nums = list(range(_lo, _hi + 1))
+                    _pcols = st.columns(len(_nums) + 2)
+                    if _pcols[0].button("‹", key="ec_prev", disabled=_pg <= 1, use_container_width=True):
+                        st.session_state.ec_page = _pg - 1; st.rerun()
+                    for _i, _num in enumerate(_nums, start=1):
+                        if _pcols[_i].button(str(_num), key=f"ec_pg_{_num}", use_container_width=True,
+                                             type="primary" if _num == _pg else "secondary"):
+                            st.session_state.ec_page = _num; st.rerun()
+                    if _pcols[-1].button("›", key="ec_next", disabled=_pg >= _pages, use_container_width=True):
+                        st.session_state.ec_page = _pg + 1; st.rerun()
+
         # ── Quick Edit panel ──────────────────────────────────────
         with qe_col:
+          with st.container(border=True, key="npcard_quickedit"):
             st.markdown("""
             <div style="border-left:3px solid #f97316;padding-left:10px;margin-bottom:12px">
               <span style="font-weight:700;font-size:1rem">Quick Edit</span>
@@ -634,9 +808,9 @@ if nav in ("Customer List", "Add Project"):
 
             if not qe_proj:
                 st.markdown("""
-                <div style="background:#1e293b;border-radius:10px;padding:20px;text-align:center;color:#475569">
+                <div style="text-align:center;color:#475569;padding:10px 0">
                   <div style="font-size:1.5rem;margin-bottom:8px">📂</div>
-                  <div style="font-size:0.82rem">Choose Project on Left<br>(click customer name)</div>
+                  <div style="font-size:0.82rem">Choose Project on Left<br>(click project name)</div>
                 </div>""", unsafe_allow_html=True)
             else:
                 st.markdown(f"<div style='font-weight:600;margin-bottom:8px;color:#f97316'>{qe_proj.get('customer_name','')}</div>", unsafe_allow_html=True)
@@ -655,21 +829,21 @@ if nav in ("Customer List", "Add Project"):
                         update_project(supabase, qe_pid, {"project_status":"completed"})
                         log_activity(supabase,"Status → Completed",entity_type="project",
                                      project_id=qe_pid,project_name=qe_proj.get("customer_name"))
-                        st.rerun()
+                        st.toast("✅ Status → Completed", icon="✅"); st.rerun()
                 with qs2:
                     if st.button("ACTIVE", key="qe_act", use_container_width=True,
                                  type="primary" if _is_act else "secondary"):
                         update_project(supabase, qe_pid, {"project_status":"in_progress"})
                         log_activity(supabase,"Status → Active",entity_type="project",
                                      project_id=qe_pid,project_name=qe_proj.get("customer_name"))
-                        st.rerun()
+                        st.toast("✅ Status → Active", icon="✅"); st.rerun()
                 with qs3:
                     if st.button("CANCELLED", key="qe_can", use_container_width=True,
                                  type="primary" if _is_can else "secondary"):
                         update_project(supabase, qe_pid, {"project_status":"cancelled"})
                         log_activity(supabase,"Status → Cancelled",entity_type="project",
                                      project_id=qe_pid,project_name=qe_proj.get("customer_name"))
-                        st.rerun()
+                        st.toast("✅ Status → Cancelled", icon="✅"); st.rerun()
 
                 # ── Notes ─────────────────────────────────────────
                 st.markdown("<div style='font-size:0.78rem;color:#94a3b8;margin:10px 0 4px'>Notes</div>", unsafe_allow_html=True)
@@ -677,49 +851,47 @@ if nav in ("Customer List", "Add Project"):
                                          value=str(qe_proj.get("notes","") or ""),
                                          key="qe_notes", label_visibility="collapsed", height=90)
 
-                # ── Payment Update ────────────────────────────────
-                if role == "admin":
-                    st.markdown("<div style='font-size:0.78rem;color:#94a3b8;margin:10px 0 6px'>Payment Update</div>", unsafe_allow_html=True)
-                    pu1, pu2 = st.columns(2)
-                    pu3, pu4 = st.columns(2)
-                    with pu1:
-                        if st.button("Advance\nInstallment", key="pu_adv", use_container_width=True):
-                            st.session_state.qe_pay_type = "Advance Installment"
-                    with pu2:
-                        if st.button("Loan\nInstallment", key="pu_loan", use_container_width=True):
-                            st.session_state.qe_pay_type = "Loan Installment"
-                    with pu3:
-                        if st.button("Installment", key="pu_inst", use_container_width=True):
-                            st.session_state.qe_pay_type = "Installment"
-                    with pu4:
-                        if st.button("Subsidy", key="pu_sub", use_container_width=True):
-                            st.session_state.qe_pay_type = "Subsidy"
-
-                    if st.session_state.get("qe_pay_type"):
-                        _ptype = st.session_state.qe_pay_type
-                        with st.form("qe_pay_form"):
-                            st.markdown(f"<div style='font-size:0.78rem;color:#f97316;margin-bottom:4px'>+ {_ptype}</div>", unsafe_allow_html=True)
-                            pa1, pa2 = st.columns(2)
-                            with pa1: p_amt  = st.number_input("Amount (₹)", min_value=0.0, step=1000.0, value=None, placeholder="0", key="p_amt") or 0.0
-                            with pa2: p_date = st.date_input("Date", key="p_date")
-                            if st.form_submit_button("Add Payment", use_container_width=True):
-                                existing = supabase.table("installments").select("installment_no").eq("project_id", qe_pid).execute().data or []
-                                next_no  = max([e.get("installment_no",0) for e in existing], default=0) + 1
-                                supabase.table("installments").insert({
-                                    "project_id": qe_pid, "installment_no": next_no,
-                                    "amount": p_amt, "due_date": str(p_date), "status": "paid",
-                                }).execute()
-                                log_activity(supabase, f"Payment: {_ptype}",entity_type="installment",
-                                             project_id=qe_pid,project_name=qe_proj.get("customer_name"),
-                                             details=f"₹{p_amt:,.0f}")
-                                st.session_state.qe_pay_type = None
-                                st.success("✅ Payment added!")
-                                st.rerun()
+                # ── Add Payment / Installment (linked to Financial Progress) ──
+                _qe_total = float(qe_proj.get("total_cost", 0) or 0)
+                _qe_paid  = sum(float(i.get("amount", 0) or 0) for i in
+                                (supabase.table("installments").select("amount").eq("project_id", qe_pid).execute().data or []))
+                _qe_due   = _qe_total - _qe_paid
+                st.markdown(
+                    f"<div style='font-size:0.78rem;color:#94a3b8;margin:10px 0 4px'>Add Payment / Installment</div>"
+                    f"<div style='font-size:0.7rem;color:#64748b;margin-bottom:4px'>Received: "
+                    f"<b style='color:#22c55e'>₹{_qe_paid:,.0f}</b> · Due: <b style='color:#ef4444'>₹{_qe_due:,.0f}</b></div>",
+                    unsafe_allow_html=True)
+                with st.form("qe_add_pay_form", clear_on_submit=True):
+                    qa1, qa2 = st.columns(2)
+                    with qa1:
+                        qe_ptype = st.selectbox("Type", ["Advance Payment", "Installment", "Subsidy"], key="qe_pay_type_sel")
+                    with qa2:
+                        qe_pamt  = st.number_input("Amount (₹)", min_value=0.0, step=1000.0, value=None, placeholder="0", key="qe_p_amt") or 0.0
+                    qe_pdate = st.date_input("Payment Date", key="qe_p_date")
+                    if st.form_submit_button("➕ Add Payment", use_container_width=True):
+                        if qe_pamt <= 0:
+                            st.error("Enter an amount.")
+                        else:
+                            existing = supabase.table("installments").select("installment_no").eq("project_id", qe_pid).execute().data or []
+                            next_no  = max([e.get("installment_no",0) for e in existing], default=0) + 1
+                            _row = {"project_id": qe_pid, "installment_no": next_no,
+                                    "amount": qe_pamt, "due_date": str(qe_pdate), "status": "paid"}
+                            try:
+                                supabase.table("installments").insert({**_row, "payment_type": qe_ptype}).execute()
+                            except Exception:
+                                supabase.table("installments").insert(_row).execute()
+                            _new_paid = _qe_paid + qe_pamt
+                            update_project(supabase, qe_pid, {"amount_paid": _new_paid, "balance": _qe_total - _new_paid})
+                            log_activity(supabase, f"Payment: {qe_ptype}", entity_type="installment",
+                                         project_id=qe_pid, project_name=qe_proj.get("customer_name"),
+                                         details=f"₹{qe_pamt:,.0f} · {qe_pdate}")
+                            st.toast("✅ Payment added!", icon="✅")
+                            st.rerun()
 
                 # ── Save ──────────────────────────────────────────
                 if st.button("💾 Save Changes", use_container_width=True, type="primary", key="qe_save"):
                     update_project(supabase, qe_pid, {"notes": qe_notes})
-                    st.success("✅ Saved!")
+                    st.toast("✅ Saved!", icon="✅")
                     st.rerun()
 
     if nav == "Add Project":
@@ -729,11 +901,6 @@ if nav in ("Customer List", "Add Project"):
           <div style="font-size:1.3rem;font-weight:800">Add New Solar Project / Customer</div>
           <div style="color:#64748b;font-size:0.85rem">Enter customer and project details to create a new solar EPC project</div>
         </div>""", unsafe_allow_html=True)
-
-        # Persisted save confirmation (survives the rerun)
-        if st.session_state.get("np_saved_msg"):
-            st.success(st.session_state.np_saved_msg)
-            st.session_state.np_saved_msg = None
 
         # init session state
         if "draft_insts" not in st.session_state:
@@ -747,73 +914,70 @@ if nav in ("Customer List", "Add Project"):
         with left_col:
 
             # Section 1 — Customer Info
-            st.markdown("""<div style="background:#1e293b;border-radius:10px;padding:4px 14px 2px;margin-bottom:4px">
-              <div style="display:flex;align-items:center;gap:8px;padding:10px 0 8px">
-                <div style="background:#dc2626;color:#fff;border-radius:50%;width:22px;height:22px;
-                  display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0">1</div>
-                <span style="font-weight:700">Customer Information</span>
-              </div></div>""", unsafe_allow_html=True)
+            with st.container(border=True, key="npcard_cust"):
+                st.markdown("""<div style="display:flex;align-items:center;gap:8px;padding:2px 0 8px">
+                    <div style="background:#dc2626;color:#fff;border-radius:50%;width:22px;height:22px;
+                      display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0">1</div>
+                    <span style="font-weight:700">Customer Information</span></div>""", unsafe_allow_html=True)
 
-            ci1, ci2, ci3 = st.columns([1.2, 1, 1])
-            with ci1: np_name    = st.text_input("Customer Name *", placeholder="Enter full name",        key="np_name")
-            with ci2: np_mobile  = st.text_input("Mobile Number *",  placeholder="+91 mobile number",     key="np_mobile")
-            with ci3: np_altmob  = st.text_input("Alternative Mobile", placeholder="+91 alternate",       key="np_altmob")
+                ci1, ci2, ci3 = st.columns([1.2, 1, 1])
+                with ci1: np_name    = st.text_input("Customer Name *", placeholder="Enter full name",        key="np_name")
+                with ci2: np_mobile  = st.text_input("Mobile Number *",  placeholder="+91 mobile number",     key="np_mobile")
+                with ci3: np_altmob  = st.text_input("Alternative Mobile", placeholder="+91 alternate",       key="np_altmob")
 
-            ci4, ci5, ci6 = st.columns([1.2, 1, 0.9])
-            with ci4: np_email   = st.text_input("Email Address",    placeholder="Enter email",           key="np_email")
-            with ci5: np_aadhar  = st.text_input("Aadhar Number",    placeholder="Enter Aadhar number",   key="np_aadhar")
-            with ci6: np_elecbill= st.text_input("Electricity Bill ID", placeholder="Bill ID",            key="np_elecbill")
-
-            st.markdown("<div style='margin-top:6px'></div>", unsafe_allow_html=True)
+                ci4, ci5, ci6 = st.columns([1.2, 1, 0.9])
+                with ci4: np_email   = st.text_input("Email Address",    placeholder="Enter email",           key="np_email")
+                with ci5: np_aadhar  = st.text_input("Aadhar Number",    placeholder="Enter Aadhar number",   key="np_aadhar")
+                with ci6: np_elecbill= st.text_input("Electricity Bill ID", placeholder="Bill ID",            key="np_elecbill")
 
             # Section 2 — Site Info
-            st.markdown("""<div style="background:#1e293b;border-radius:10px;padding:4px 14px 2px;margin-bottom:4px">
-              <div style="display:flex;align-items:center;gap:8px;padding:10px 0 8px">
-                <div style="background:#dc2626;color:#fff;border-radius:50%;width:22px;height:22px;
-                  display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0">2</div>
-                <span style="font-weight:700">Site Information</span>
-              </div></div>""", unsafe_allow_html=True)
+            with st.container(border=True, key="npcard_site"):
+                st.markdown("""<div style="display:flex;align-items:center;gap:8px;padding:2px 0 8px">
+                    <div style="background:#dc2626;color:#fff;border-radius:50%;width:22px;height:22px;
+                      display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0">2</div>
+                    <span style="font-weight:700">Site Information</span></div>""", unsafe_allow_html=True)
 
-            np_addr = st.text_input("Installation Address *", placeholder="Enter complete installation address", key="np_addr")
+                np_addr = st.text_input("Installation Address *", placeholder="Enter complete installation address", key="np_addr")
 
-            si1, si2, si3 = st.columns(3)
-            with si1: np_village  = st.text_input("Village / Locality", placeholder="Village", key="np_village")
-            with si2: np_taluka   = st.text_input("Taluka",             placeholder="Taluka",  key="np_taluka")
-            with si3: np_district = st.text_input("District",           placeholder="District",key="np_district")
+                si1, si2, si3 = st.columns(3)
+                with si1: np_village  = st.text_input("Village / Locality", placeholder="Village", key="np_village")
+                with si2: np_taluka   = st.text_input("Taluka",             placeholder="Taluka",  key="np_taluka")
+                with si3: np_district = st.text_input("District",           placeholder="District",key="np_district")
 
-            si4, si5 = st.columns(2)
-            with si4: np_pin    = st.text_input("Pincode",            placeholder="Pincode",              key="np_pin")
-            with si5: np_latlng = st.text_input("Longitude, Latitude",placeholder="e.g. 72.8, 21.1",     key="np_latlng")
+                si4, si5 = st.columns(2)
+                with si4: np_pin    = st.text_input("Pincode",            placeholder="Pincode",              key="np_pin")
+                with si5: np_latlng = st.text_input("Longitude, Latitude",placeholder="e.g. 72.8, 21.1",     key="np_latlng")
 
-            # Created date — user selects via calendar
-            st.markdown("<div style='background:#1e293b;border-radius:8px;padding:10px 14px;margin-top:10px'><div style='color:#64748b;font-size:0.7rem;text-transform:uppercase;margin-bottom:4px'>📅 CREATED DATE</div>", unsafe_allow_html=True)
-            np_created_date = st.date_input("", value=_dt.date.today(), key="np_created_date", label_visibility="collapsed")
-            st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown("<div style='color:#64748b;font-size:0.7rem;text-transform:uppercase;margin:6px 0 2px'>📅 Created Date</div>", unsafe_allow_html=True)
+                np_created_date = st.date_input("", value=_dt.date.today(), key="np_created_date", label_visibility="collapsed")
 
         # ── RIGHT ─────────────────────────────────────────────────
         with right_col:
 
-            # Execution Partner
-            st.markdown("""<div style="background:#1e293b;border-radius:10px;padding:12px 14px;margin-bottom:8px">
-              <div style="color:#94a3b8;font-size:0.72rem;text-transform:uppercase;margin-bottom:6px">Execution Partner</div>""",
-              unsafe_allow_html=True)
-            np_exec = st.selectbox("", ["Voltedge", "Manual"], key="np_exec", label_visibility="collapsed")
-            st.markdown("</div>", unsafe_allow_html=True)
+            # Execution Partner — Voltedge + EPC partners from the EPC page
+            with st.container(border=True, key="npcard_exec"):
+                st.markdown("<div style='color:#94a3b8;font-size:0.72rem;text-transform:uppercase;margin:2px 0 4px'>Execution Partner</div>", unsafe_allow_html=True)
+                try:
+                    _epc_rows = supabase.table("epcs").select("name").order("name").execute().data or []
+                except Exception:
+                    _epc_rows = []
+                _exec_opts = ["Voltedge"] + [e["name"] for e in _epc_rows
+                                             if e.get("name") and e["name"].lower() != "voltedge"]
+                np_exec = st.selectbox("", _exec_opts, key="np_exec", label_visibility="collapsed")
 
             # Section 3 — Project Info
-            st.markdown("""<div style="background:#1e293b;border-radius:10px;padding:4px 14px 2px;margin-bottom:4px">
-              <div style="display:flex;align-items:center;gap:8px;padding:10px 0 8px">
-                <div style="background:#dc2626;color:#fff;border-radius:50%;width:22px;height:22px;
-                  display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0">3</div>
-                <span style="font-weight:700">Project Information</span>
-              </div></div>""", unsafe_allow_html=True)
+            with st.container(border=True, key="npcard_proj"):
+                st.markdown("""<div style="display:flex;align-items:center;gap:8px;padding:2px 0 8px">
+                    <div style="background:#dc2626;color:#fff;border-radius:50%;width:22px;height:22px;
+                      display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;flex-shrink:0">3</div>
+                    <span style="font-weight:700">Project Information</span></div>""", unsafe_allow_html=True)
 
-            pi1, pi2 = st.columns(2)
-            with pi1: np_size  = st.number_input("System Size (kWp) *", min_value=0.0, step=0.5, value=None, placeholder="0", key="np_size")
-            with pi2: np_conn  = st.selectbox("Connection Type *", ["On-Grid","Off-Grid","Hybrid"], key="np_conn")
+                pi1, pi2 = st.columns(2)
+                with pi1: np_size  = st.number_input("System Size (kWp) *", min_value=0.0, step=0.5, value=None, placeholder="0", key="np_size")
+                with pi2: np_conn  = st.selectbox("Connection Type *", ["On-Grid","Off-Grid","Hybrid"], key="np_conn")
 
-            _status_disp = st.selectbox("Project Status", ["Active","Completed"], key="np_status")
-            np_status    = "completed" if _status_disp == "Completed" else "in_progress"
+                _status_disp = st.selectbox("Project Status", ["Active","Completed"], key="np_status")
+                np_status    = "completed" if _status_disp == "Completed" else "in_progress"
 
             # ── Payment Mode — 2 buttons only ───────────────────
             _pm = st.session_state.get("np_pay_mode", "CASH")
@@ -1019,7 +1183,7 @@ if nav in ("Customer List", "Add Project"):
                             }).execute()
                         st.session_state.draft_insts = []
                         st.session_state.bank_insts  = []
-                        st.session_state.np_saved_msg = f"✅ Project saved for {result.get('customer_name','customer')}! Open it via 📂 to manage steps & documents."
+                        st.toast(f"✅ Project saved for {result.get('customer_name','customer')}!", icon="✅")
                         st.rerun()
                     else:
                         st.error("❌ Project was NOT saved — see the error above. Fix the database column and try again.")
@@ -1029,68 +1193,14 @@ if nav in ("Customer List", "Add Project"):
                           "np_addr","np_village","np_taluka","np_district","np_pin","np_latlng",
                           "np_exec","np_size","np_conn","np_status","np_notes","draft_insts"]:
                     st.session_state.pop(k, None)
-                st.rerun()
+                st.toast("🗑️ Form cleared", icon="🗑️"); st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  REPORT PAGE — ADMIN ONLY
 # ══════════════════════════════════════════════════════════════════════════════
 if role == "admin" and nav == "Report":
-    if True:
-        st.markdown("#### 📊 Financial & Project Reports")
-        rc1, rc2, rc3 = st.columns(3)
-        rc1.metric("💰 Total Project Value", format_currency(total_cost))
-        rc2.metric("✅ Total Received",       format_currency(total_paid))
-        rc3.metric("⏳ Outstanding Balance",  format_currency(balance_due))
-
-        st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
-
-        if not df.empty:
-            if "project_status" in df.columns:
-                st.markdown("**Summary by Status**")
-                grp = df.groupby("project_status").agg(
-                    Count=("project_status","count"),
-                    **{"Total Cost":  ("total_cost",  lambda x: x.fillna(0).sum())},
-                    **{"Amount Paid": ("amount_paid", lambda x: x.fillna(0).sum())},
-                    **{"Balance":     ("balance",     lambda x: x.fillna(0).sum())},
-                ).reset_index()
-                grp.rename(columns={"project_status":"Status"}, inplace=True)
-                for col in ("Total Cost","Amount Paid","Balance"):
-                    grp[col] = grp[col].apply(lambda x: format_currency(float(x)))
-                st.dataframe(grp, use_container_width=True, hide_index=True)
-
-            st.markdown("<hr style='margin:12px 0'>", unsafe_allow_html=True)
-            fin_cols = [c for c in ["customer_name","location","system_size_kwp","project_status","total_cost","amount_paid","balance"] if c in df.columns]
-            fin_df   = df[fin_cols].copy()
-            ren      = {"customer_name":"Customer","location":"Location","system_size_kwp":"kWp",
-                        "project_status":"Status","total_cost":"Total Cost","amount_paid":"Paid","balance":"Balance"}
-            fin_df.rename(columns=ren, inplace=True)
-            for col in ("Total Cost","Paid","Balance"):
-                if col in fin_df.columns:
-                    fin_df[col] = fin_df[col].apply(lambda x: format_currency(float(x)) if pd.notna(x) else "₹0")
-            st.dataframe(fin_df, use_container_width=True, hide_index=True)
-
-            raw = df[fin_cols].copy(); raw.rename(columns=ren, inplace=True)
-            st.download_button("⬇️ Export CSV", raw.to_csv(index=False).encode("utf-8"),
-                               "voltedge_report.csv", "text/csv", use_container_width=True)
-
-            if all(c in df.columns for c in ("customer_name","total_cost","amount_paid")):
-                st.markdown("**Payment Collection Analysis**")
-                top = df.nlargest(min(10, len(df)), "total_cost")
-                fig_pay = go.Figure()
-                fig_pay.add_trace(go.Bar(name="Total Cost",  x=top["customer_name"], y=top["total_cost"].fillna(0),  marker_color="#3b82f6"))
-                fig_pay.add_trace(go.Bar(name="Amount Paid", x=top["customer_name"], y=top["amount_paid"].fillna(0), marker_color="#22c55e"))
-                fig_pay.add_trace(go.Bar(name="Balance",     x=top["customer_name"], y=top["balance"].fillna(0),     marker_color="#ef4444"))
-                fig_pay.update_layout(barmode="group", height=350,
-                                      margin=dict(t=10,b=60,l=10,r=10),
-                                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                                      font_color="#f1f5f9",
-                                      xaxis=dict(gridcolor="#334155", tickangle=-30),
-                                      yaxis=dict(gridcolor="#334155"),
-                                      legend=dict(bgcolor="rgba(0,0,0,0)"))
-                st.plotly_chart(fig_pay, use_container_width=True)
-        else:
-            st.info("No data available.")
+    render_reports(supabase, projects, df)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1127,12 +1237,12 @@ if role == "admin" and nav == "Users":
                         supabase.table("app_users").update({
                             "status": "approved", "role": "employee"
                         }).eq("id", u["id"]).execute()
-                        st.success(f"✅ {u.get('name','')} approved!")
+                        st.toast(f"✅ {u.get('name','')} approved!", icon="✅")
                         st.rerun()
                 with pc5:
                     if st.button("❌ Reject", key=f"reject_{u['id']}", use_container_width=True):
                         supabase.table("app_users").update({"status": "rejected"}).eq("id", u["id"]).execute()
-                        st.warning(f"❌ {u.get('name','')} rejected.")
+                        st.toast(f"❌ {u.get('name','')} rejected.", icon="❌")
                         st.rerun()
             st.markdown("<hr style='margin:12px 0'>", unsafe_allow_html=True)
         else:
@@ -1157,12 +1267,12 @@ if role == "admin" and nav == "Users":
                     key=f"role_{u['id']}", label_visibility="collapsed")
                 if new_role != cur_role:
                     supabase.table("app_users").update({"role": new_role}).eq("id", u["id"]).execute()
-                    st.rerun()
+                    st.toast(f"✅ Role updated → {new_role}", icon="✅"); st.rerun()
             with uc5:
                 if u.get("email") != "voltedgeenergysolutions011@gmail.com":
                     if st.button("🚫 Revoke", key=f"revoke_{u['id']}", use_container_width=True):
                         supabase.table("app_users").update({"status": "rejected"}).eq("id", u["id"]).execute()
-                        st.rerun()
+                        st.toast("🚫 Access revoked", icon="🚫"); st.rerun()
 
         if rejected_users:
             with st.expander(f"Rejected Users ({len(rejected_users)})"):
@@ -1173,7 +1283,7 @@ if role == "admin" and nav == "Users":
                     rc3.write("Rejected")
                     if rc4.button("🔁 Re-approve", key=f"reapprove_{u['id']}"):
                         supabase.table("app_users").update({"status":"approved","role":"employee"}).eq("id",u["id"]).execute()
-                        st.rerun()
+                        st.toast("✅ Re-approved", icon="✅"); st.rerun()
 
         # ── Full Activity Log ─────────────────────────────────────
         st.markdown("<hr style='margin:20px 0'>", unsafe_allow_html=True)
@@ -1194,7 +1304,7 @@ if role == "admin" and nav == "Users":
                 key="log_type_filter"
             )
         with lc3:
-            log_limit = st.selectbox("Show", [25, 50, 100], key="log_limit")
+            log_limit = st.selectbox("Show", [10, 25, 50, 100], key="log_limit")
 
         # Extract email from filter selection
         filter_email = None
@@ -1226,13 +1336,20 @@ if role == "admin" and nav == "Users":
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  EPC PARTNERS PAGE — ADMIN ONLY
+# ══════════════════════════════════════════════════════════════════════════════
+if role == "admin" and nav == "EPC Partners":
+    render_epc_page(supabase, projects)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  SETTINGS PAGE
 # ══════════════════════════════════════════════════════════════════════════════
 if nav == "Settings":
     _uname = st.session_state.get("user_name", "N/A")
     _umail = st.session_state.get("user_email", "N/A")
     _upic  = st.session_state.get("user_picture", "")
-    _eid   = "EMP-" + (str(user_row.get("id"))[:3].upper() if (user_row and user_row.get("id")) else "001") if user_row else "EMP-001"
+    _eid   = st.session_state.get("user_code", "VE-001")
     _role_badge = ("<span style='background:#dc262622;color:#ef4444;border:1px solid #dc2626;"
                    "padding:2px 10px;border-radius:6px;font-size:0.72rem;font-weight:700'>🔴 Admin</span>"
                    if role == "admin" else

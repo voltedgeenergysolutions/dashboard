@@ -132,8 +132,26 @@ def load_user_from_db(supabase):
             result = supabase.table("app_users").insert(row).execute().data
             user = result[0] if result else row
 
+        # Assign a sequential employee code (VE-001, VE-002, …) if missing
+        if not user.get("employee_code"):
+            try:
+                allc = supabase.table("app_users").select("employee_code").execute().data or []
+                nums = []
+                for r in allc:
+                    c = (r.get("employee_code") or "").strip()
+                    if c.upper().startswith("VE-") and c[3:].isdigit():
+                        nums.append(int(c[3:]))
+                code = f"VE-{(max(nums) + 1) if nums else 1:03d}"
+                if user.get("id"):
+                    supabase.table("app_users").update({"employee_code": code}).eq("id", user["id"]).execute()
+                user["employee_code"] = code
+            except Exception:
+                # Column may not exist yet — fall back to an id-derived code
+                user["employee_code"] = "VE-" + (str(user.get("id"))[:3].upper() if user.get("id") else "001")
+
         st.session_state.user_role   = user.get("role",   "employee")
         st.session_state.user_status = user.get("status", "pending")
+        st.session_state.user_code   = user.get("employee_code", "VE-001")
         return user
 
     except Exception as e:
